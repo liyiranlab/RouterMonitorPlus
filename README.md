@@ -32,64 +32,11 @@ https://www.netdata.cloud/
 6 调试完成后，建议大家在所有#define DEBUG_ENABLED全面加英文的 // 关闭串口调试功能使用。
 
 正文：
-1 首先：关于开源安装软件和使用代码部分参考我提供的开源链接 RouterMonitor，这里是刷固件的方法；
+1 首先：关于开源安装软件和使用代码部分参考我提供的开源链接[ RouterMonitor](https://gitee.com/dannylsl/routermonitor)，这里是刷固件的方法；
 2 我的代码设置方法和原版稍有不同，我的基本全都放到main.ino开始部分宏定义，方便大家设置；
 3 串口调试：建议使用：正点原子串口调试助手，我提供两个压缩文件，一个是我改后的源代码，波特率921600，在platformio.ini配置文件中可以看到，一个是，深睡眠调试代码，波特率76800，是ESP8266默认的波特率，方便查看芯片所有信息，方便调试深睡眠和唤醒；
 4 下面是我的main.ino开始部分代码，目的就是方便大家修改。
 
-// 功能说明
-// wifi连接无阻塞,NTP时间同步无阻塞,屏幕显示无阻塞；
-// NTP每2小时与NTP服务器同步一次；
-// 添加Deep Sleep功能,在进入规定时间段后,关闭屏幕,停止lvgl输出,关闭除了rtc外的一切功能,进入深睡眠;
-// 深睡眠定义时间段精确到分钟;
-// 深睡眠过程中不需要联网时尽量保持屏幕关闭,过了设定时间段立即恢复功能;
-// 如果不是通过RTC唤醒的情况（比如断电后来电）,如果还在规定深睡眠时间段内,迟5分钟在运行进入深睡眠程序;
-// 🟢注意:(如果不断电,只通过reset pin复位（比如串口）,仍然不会开启屏幕,会根据RTC中的数据判断是否再次进入深睡眠)
-// 这5分钟所有功能正常运行,屏幕正常输出,如果加上5分钟超过了深睡眠设定时间则不进入深睡眠,
-// 由于8266定时精度有误差,深睡眠前半小时强制同步NTP时间一次,尽可能精确的进入深睡眠,
-// 进入深睡眠时的定时长度=当前需要睡眠的时长-(当前需要睡眠的时长*2%),
-// 注意只在每次NTP同步后确定睡眠多久时减一次2%，排除8266RTC计时长度可能不够导致的多次唤醒中不联网的情况下补偿
-// 让8266可以提前醒过来校对时间,尽可能能精确的唤醒，
-// 设备后续的DeviceState状态切换先判断NTP是否同步成功，否则跳过DeviceState状态切换
-
-// #define DEBUG_ENABLED        // 串口查看基本信息可能刷屏
-// #define DEBUG_ENABLED_0      // 串口查看基本信息可能刷屏
-// #define DEBUG_ENABLED_TIME   // 串口查看时间相关信息
-// #define DEBUG_ENABLED_RAM    // 串口查看Task_cb中内存占用情况
-// #define DEBUG_ENABLED_CPU    // 串口查看loop中cpu占用率
-// #define DEBUG_ENABLED_DATA   // 串口查看获取NetData的数据
-// #define DEBUG_ENABLED_WIFI   // 取消注释以启用WiFi调试信息
-
-// 🟢 可修改区域：
-const char *ssid = "AX";         // 连接WiFi名（此处使用AX为示例）
-                                   // 请将您需要连接的WiFi名填入引号中
-const char *password = "12345678"; // 连接WiFi密码（此处使用12345678为示例）
-// NetData服务器配置
-#define NETDATA_SERVER_IP "192.168.10.1"  // 定义被监控的NetData服务器地址
-#define NETDATA_SERVER_PORT 19999         // NetData服务器端口
-//修改数据获取接口的相关用AI搜索相关代码
-//下面是路由器cpu温度接口关键词
-#define CHART_NET_RX      "net.wan"
-#define CHART_NET_TX      "net.wan"
-#define CHART_CPU         "system.cpu"
-#define CHART_MEM         "mem.available"
-#define CHART_TEMP        "sensors.temp_thermal_zone0_thermal_thermal_zone0_thermal_zone0"
-// 维度过滤数据方向
-#define DIM_RX            "received"
-#define DIM_TX            "sent"
-// 被监控的路由器Ram大小单位MB
-#define CHART_MEM_X   1024.0
-
-// 深睡眠总开关：true 启用深睡眠功能，false 完全禁用深睡眠
-#define DEEP_SLEEP_ENABLED true
-// 深睡眠时间段（24h制,精确到分钟） 定时
-constexpr uint8_t SLEEP_START_HOUR = 21; // 开始：21:20
-constexpr uint8_t SLEEP_START_MIN = 20;
-constexpr uint8_t SLEEP_END_HOUR = 07;   // 结束：07:20
-constexpr uint8_t SLEEP_END_MIN = 20;
-
-
-本帖隐藏的内容
 我的修改后的源码：
 
 D:\routermonitor-master\images
