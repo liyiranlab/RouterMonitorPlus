@@ -37,7 +37,7 @@ https://www.netdata.cloud/
 3 串口调试：建议使用：正点原子串口调试助手，我提供两个项目，一个在test文件中，主页是我改后的源代码，波特率921600，在platformio.ini配置文件中可以看到，test是，深睡眠调试代码，波特率76800，也是ESP8266默认的波特率，方便查看芯片boot时的所有信息，方便调试深睡眠和唤醒；
 4 下面是我的main.ino开始部分代码，目的就是方便大家修改。
 
-百度分享也一样：
+百度分享也一样,文件更完整：
 
 通过网盘分享的文件：RouterMonitor+
 链接: https://pan.baidu.com/s/1gsRqUBNt8IX4nI2scaF0vg?pwd=nvvt 提取码: nvvt
