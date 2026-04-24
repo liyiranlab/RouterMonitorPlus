@@ -248,7 +248,7 @@ enum DataRequestPhase {
 
 DataRequestPhase currentRequestPhase = REQ_IDLE;
 unsigned long lastDataRequestTime = 0;
-const unsigned long DATA_REQUEST_INTERVAL = 1000;  // 每 3 秒发起一次新请求（可根据需要调整）
+const unsigned long DATA_REQUEST_INTERVAL = 1000;  // 每 1 秒发起一次新请求（可根据需要调整）
 
 // 数据新鲜度标志
 bool newCPUData = false;
