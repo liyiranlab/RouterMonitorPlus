@@ -14,7 +14,6 @@ SD2小电视的方案
 https://oshwhub.com/Q21182889/esp-xiao-dian-shi
 
 ## 其他参考开源项目
-![hardware compare](images/hardware_compare.png)
 - **Weather GSM** https://oshwhub.com/yeshengchengxuyuan/b4b67ab1e8234aeebea054b4eda6f549
 - **Peak** https://oshwhub.com/eedadada/chappie_oshw
 
