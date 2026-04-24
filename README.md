@@ -32,7 +32,7 @@ https://www.netdata.cloud/
 6 调试完成后，建议大家在所有#define DEBUG_ENABLED全面加英文的 // 关闭串口调试功能使用。
 
 正文：
-1 首先：关于开源安装软件和使用代码部分参考我提供的开源链接[ RouterMonitor](https://gitee.com/dannylsl/routermonitor)，这里是刷固件的方法；
+1 首先：关于开源安装软件和使用代码部分参考我提供的开源链接[ RouterMonitor](https://gitee.com/dannylsl/routermonitor)，这里只介绍我遇到的具体问题；
 2 我的代码设置方法和原版稍有不同，我的基本全都放到main.ino开始部分宏定义，方便大家设置；
 3 串口调试：建议使用：正点原子串口调试助手，我提供两个项目，一个在test文件中，主页是我改后的源代码，波特率921600，在platformio.ini配置文件中可以看到，test是，深睡眠调试代码，波特率76800，也是ESP8266默认的波特率，方便查看芯片boot时的所有信息，方便调试深睡眠和唤醒；
 4 下面是我的main.ino开始部分代码，目的就是方便大家修改。
