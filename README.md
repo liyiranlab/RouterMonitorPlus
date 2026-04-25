@@ -29,7 +29,8 @@ https://www.netdata.cloud/
 3 为了降低功耗，优化和NetData软件的通信，进一步降低WIFI通信开销；  
 4 为了深睡眠，增加深睡眠功能，增加NTP时间服务代码；  
 5 为了照顾不想改SD2硬件的朋友，增加了深睡眠开关，默认关闭深睡眠；  
-6 调试完成后，建议大家在所有#define DEBUG_ENABLED全面加英文的 // 关闭串口调试功能使用。  
+6 更多功能细节可以把main文件和netdata头文件丢给AI询问；  
+7 调试完成后，建议大家在所有#define DEBUG_ENABLED全面加英文的 // 关闭串口调试功能使用。  
 
 # 正文：
 1 首先：关于开源安装软件和使用代码部分参考我提供的开源链接[ RouterMonitor](https://gitee.com/dannylsl/routermonitor)，这里只介绍我遇到的具体问题；  
