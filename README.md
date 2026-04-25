@@ -16,7 +16,7 @@ https://oshwhub.com/Q21182889/esp-xiao-dian-shi
 ## 数据信息来源 NetData
 https://www.netdata.cloud/ 
 
-## 先上图
+## 上图
 |RouterMonitor+ |RouterMonitor+Power |
 |----|  ----  |
 | ![routermonitor+](./images/routermonitor+.jpg) | ![RouterMonitor+Power](./images/routermonitor+Power.png) |
