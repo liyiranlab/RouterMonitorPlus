@@ -2,12 +2,7 @@
 ## 前言
 >路由器监控小电视改版 sd2监控 RouterMonitor+ 根据下面开源链接，用AI改的代码，代码层面已经面目全非，如果什么都不懂可以问AI解决，代码难免疏漏欢迎提意见
 >这个项目是改进至https://gitee.com/dannylsl/routermonitor
-
-## 先上图
-|RouterMonitor+ |RouterMonitor+Power |
-|----|  ----  |
-| ![routermonitor+](./images/routermonitor+.jpg) | ![RouterMonitor+Power](./images/routermonitor+Power.png) |
-
+>
 # 硬件资料
 
 SD2小电视的方案
@@ -17,9 +12,14 @@ https://oshwhub.com/Q21182889/esp-xiao-dian-shi
 - **Weather GSM** https://oshwhub.com/yeshengchengxuyuan/b4b67ab1e8234aeebea054b4eda6f549
 - **Peak** https://oshwhub.com/eedadada/chappie_oshw
 
-# 软件
+# 软件接口
 ## 数据信息来源 NetData
 https://www.netdata.cloud/ 
+
+## 先上图
+|RouterMonitor+ |RouterMonitor+Power |
+|----|  ----  |
+| ![routermonitor+](./images/routermonitor+.jpg) | ![RouterMonitor+Power](./images/routermonitor+Power.png) |
 
 上图就是我改进后的作品，改进的过程中发现很多问题，下面文章会说明，把SD2小电视的1117LDO改DCDC供电后，优化代码，平均功耗做到148mW左右，即使SD2小电视硬件没有任何改动，用我提供的开源代码也可降低现有功耗的50%。
 我的改进主要有两项，1 降低功耗，2 增加深睡眠功能，设定时间区域内：自动关闭，自动开启。
@@ -31,7 +31,7 @@ https://www.netdata.cloud/
 5 为了照顾不想改SD2硬件的朋友，增加了深睡眠开关，默认关闭深睡眠；
 6 调试完成后，建议大家在所有#define DEBUG_ENABLED全面加英文的 // 关闭串口调试功能使用。
 
-正文：
+# 正文：
 1 首先：关于开源安装软件和使用代码部分参考我提供的开源链接[ RouterMonitor](https://gitee.com/dannylsl/routermonitor)，这里只介绍我遇到的具体问题；
 2 我的代码设置方法和原版稍有不同，我的基本全都放到main.ino开始部分宏定义，方便大家设置；
 3 串口调试：建议使用：正点原子串口调试助手，我提供两个项目，一个在test文件中，主页是我改后的源代码，波特率921600，在platformio.ini配置文件中可以看到，test是，深睡眠调试代码，波特率76800，也是ESP8266默认的波特率，方便查看芯片boot时的所有信息，方便调试深睡眠和唤醒；
