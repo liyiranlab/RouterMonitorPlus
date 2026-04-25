@@ -2295,16 +2295,16 @@ void loop()
     // }
     if (isLoggedIn) {
         // 登录后：数据驱动 + 低频保底
-        bool hasNewData = (newCPUData || newMemData || newTempData || 
-                        newNetRxData || newNetTxData);
+        bool hasNewData = (newCPUData && newMemData && newTempData && 
+                        newNetRxData && newNetTxData);
         
         if (hasNewData || (millis() - lastRefreshTime >= LOGGED_IN_REFRESH_INTERVAL)) {
             lv_task_handler();
             lastRefreshTime = millis();
         }
     } else {
-        // 登录前：保持原 15ms 高速刷新，保证启动动画流畅
-        if (millis() - lastRefreshTime >= 15) {
+        // 登录前：保持原 10ms 高速刷新，保证启动动画流畅
+        if (millis() - lastRefreshTime >= 10) {
             lv_task_handler();
             lastRefreshTime = millis();
         }
