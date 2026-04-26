@@ -17,10 +17,12 @@ https://oshwhub.com/Q21182889/esp-xiao-dian-shi
 https://www.netdata.cloud/ 
 
 ## 上图
-|RouterMonitor+ |RouterMonitor+Power |
+|RouterMonitor+ |
 |----|  ----  |
-| ![routermonitor+](./images/routermonitor+.jpg) | ![RouterMonitor+Power](./images/routermonitor+Power.png) |
-
+| ![routermonitor+](./images/routermonitor+.jpg) |
+|RouterMonitor+Power |
+|  ----  |
+| ![RouterMonitor+Power](./images/routermonitor+Power.png) |
 上图就是我改进后的作品，改进的过程中发现很多问题，下面会说明，把SD2小电视的1117LDO改DCDC供电后，优化代码，平均功耗做到148mW左右，即使SD2小电视硬件没有任何改动，用我提供的开源代码也可降低现有功耗的50%。  
 我的改进主要有两项，1 降低功耗，2 增加深睡眠功能，设定时间区域内：自动深睡眠关闭屏幕，自动唤醒恢复屏幕显示。  
 因为这量个要求代码已经被我改的面目全非:  
