@@ -18,8 +18,9 @@ https://www.netdata.cloud/
 
 ## 上图
 |RouterMonitor+ |
-|----|  ----  |
+|----|
 | ![routermonitor+](./images/routermonitor+.jpg) |
+
 |RouterMonitor+Power |
 |  ----  |
 | ![RouterMonitor+Power](./images/routermonitor+Power.png) |
