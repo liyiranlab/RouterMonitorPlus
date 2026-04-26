@@ -248,7 +248,7 @@ enum DataRequestPhase {
 
 DataRequestPhase currentRequestPhase = REQ_IDLE;
 unsigned long lastDataRequestTime = 0;
-const unsigned long DATA_REQUEST_INTERVAL = 501;  // 每 1 秒发起一次新请求（可根据需要调整）
+const unsigned long DATA_REQUEST_INTERVAL = 499;  // 每 499 毫秒发起一次新请求（可根据需要调整）
 
 // 数据新鲜度标志
 bool newCPUData = false;
@@ -1514,6 +1514,7 @@ void updateChartRange()
 // 负责更新监控数据和UI显示
 static void task_cb(lv_task_t *task)
 {
+    delay(10);
     #ifdef DEBUG_ENABLED_RAM
     uint32_t task_start = millis();
     static uint32_t last_time = 0;
@@ -1653,11 +1654,12 @@ static void task_cb(lv_task_t *task)
         // last_time = task_start;
         }
 #endif
-    delay(1);
+    delay(150);
 }
 
 void UI_init(void)
 {
+    
     if (uiReady)
         return; // 防止重复初始化
 
@@ -2088,10 +2090,12 @@ void trySwitchToMonitorPage()
 void loop()
 {
     handleAsyncHttp();
+    delay(1);
 
     // ---------- 2. 检查异步请求是否完成 ----------
     bool success;
     if (isAsyncHttpDone(success)) {
+        delay(1);   // 立即给 WiFi 进入休眠的机会
         switch (currentRequestPhase) {
             case REQ_BATCH:
                 if (success) {
@@ -2116,7 +2120,8 @@ void loop()
         currentRequestPhase = REQ_IDLE;
     }
 
-    if (wifiState == WIFI_STATE_CONNECTED && ntpState == NTP_STATE_COMPLETED) {
+    //if (wifiState == WIFI_STATE_CONNECTED && ntpState == NTP_STATE_COMPLETED) {
+    if (wifiState == WIFI_STATE_CONNECTED ){
         static unsigned long lastBatchRequest = 0;        
         if (millis() - lastBatchRequest >= BATCH_REQUEST_INTERVAL) {
             // 仅当：1) 没有请求在进行；2) 上一批数据已被显示消费，才发起新请求
@@ -2125,6 +2130,7 @@ void loop()
             if (currentRequestPhase == REQ_IDLE && !hasUnshownData) {
                 static NetChartData dummyBatchData;
                 if (startBatchNetDataRequest(dummyBatchData)) {
+                    delay(1);
                     currentRequestPhase = REQ_BATCH;
                     lastBatchRequest = millis();
                 }
