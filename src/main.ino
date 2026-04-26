@@ -46,8 +46,8 @@ const char *password = "12345678"; // 连接WiFi密码（此处使用12345678为
 // 深睡眠时间段（24h制,精确到分钟） 定时
 constexpr uint8_t SLEEP_START_HOUR = 21; // 开始：21:20
 constexpr uint8_t SLEEP_START_MIN = 20;
-constexpr uint8_t SLEEP_END_HOUR = 07;   // 结束：07:20
-constexpr uint8_t SLEEP_END_MIN = 20;
+constexpr uint8_t SLEEP_END_HOUR = 07;   // 结束：07:00
+constexpr uint8_t SLEEP_END_MIN = 00;
 // 宽限期时限
 constexpr uint32_t POST_POWERON_GRACE_MS = 5 * 60 * 1000UL; // 重新上电(不是Reset)后显示5min监控再进入深睡眠
 // ┌─────────────────────────────────────────────────────────────────────────┐
@@ -248,7 +248,7 @@ enum DataRequestPhase {
 
 DataRequestPhase currentRequestPhase = REQ_IDLE;
 unsigned long lastDataRequestTime = 0;
-const unsigned long DATA_REQUEST_INTERVAL = 1000;  // 每 1 秒发起一次新请求（可根据需要调整）
+const unsigned long DATA_REQUEST_INTERVAL = 501;  // 每 1 秒发起一次新请求（可根据需要调整）
 
 // 数据新鲜度标志
 bool newCPUData = false;
@@ -2115,15 +2115,17 @@ void loop()
         // 请求完成，回到空闲状态
         currentRequestPhase = REQ_IDLE;
     }
+
     if (wifiState == WIFI_STATE_CONNECTED && ntpState == NTP_STATE_COMPLETED) {
         static unsigned long lastBatchRequest = 0;        
         if (millis() - lastBatchRequest >= BATCH_REQUEST_INTERVAL) {
-            // 仅当没有请求正在进行时，发起新的批量请求
-            if (currentRequestPhase == REQ_IDLE) {
-                // 使用一个占位 NetChartData 对象（实际不会被用到）
+            // 仅当：1) 没有请求在进行；2) 上一批数据已被显示消费，才发起新请求
+            bool hasUnshownData = (newCPUData || newMemData || newTempData || 
+                                newNetRxData || newNetTxData);
+            if (currentRequestPhase == REQ_IDLE && !hasUnshownData) {
                 static NetChartData dummyBatchData;
                 if (startBatchNetDataRequest(dummyBatchData)) {
-                    currentRequestPhase = REQ_BATCH; // 新增一个批量请求阶段
+                    currentRequestPhase = REQ_BATCH;
                     lastBatchRequest = millis();
                 }
             }
@@ -2288,16 +2290,11 @@ void loop()
     }
 
      // LVGL任务处理（使用优化后的刷新逻辑）
-    // unsigned long nextRefresh = isLoggedIn ? LOGGED_IN_REFRESH_INTERVAL : 15;
-    // if (millis() - lastRefreshTime >= nextRefresh) {
-    //     lv_task_handler();
-    //     lastRefreshTime = millis();
-    // }
     if (isLoggedIn) {
         // 登录后：数据驱动 + 低频保底
         bool hasNewData = (newCPUData && newMemData && newTempData && 
                         newNetRxData && newNetTxData);
-        
+
         if (hasNewData || (millis() - lastRefreshTime >= LOGGED_IN_REFRESH_INTERVAL)) {
             lv_task_handler();
             lastRefreshTime = millis();
