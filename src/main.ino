@@ -30,8 +30,7 @@ const char *password = "12345678"; // 连接WiFi密码（此处使用12345678为
 #define NETDATA_SERVER_PORT 19999         // NetData服务器端口
 //修改数据获取接口的相关用AI搜索相关代码
 //下面是路由器cpu温度接口关键词 
-#define CHART_NET_RX      "net.wan"
-#define CHART_NET_TX      "net.wan"
+#define CHART_NET         "net.wan"
 #define CHART_CPU         "system.cpu"
 #define CHART_MEM         "mem.available"
 #define CHART_TEMP        "sensors.temp_thermal_zone0_thermal_thermal_zone0_thermal_zone0"
@@ -699,6 +698,7 @@ bool startAsyncNTPSync(bool force = false)
     ntpState = NTP_STATE_SYNCING;
     ntpSyncStartTime = millis();
     timeClient.forceUpdate(); // 发送 NTP 请求，非阻塞启动
+    delay(1);
 
     #ifdef DEBUG_ENABLED_0
     Serial.println("NTP sync started\n");
@@ -988,8 +988,11 @@ void actualEnterDeepSleep(uint32_t seconds, bool alreadyCompensated = false)
 
     // 优化后：单次断开 + 强制射频关闭
     closeNetdataConnection();  // 关闭 NetData 连接
+    delay(1);
     WiFi.disconnect(true);   // 清除连接状态
+    delay(1);
     WiFi.mode(WIFI_OFF);     // 关闭 WiFi 模式
+    delay(1);
     WiFi.forceSleepBegin();  // 强制射频进入睡眠（比 mode OFF 更省电）
     delay(1);              // 确保射频完全关闭
         
@@ -1183,9 +1186,9 @@ bool connectWiFi(bool forceFullReset)
     
     if (useHardReset) {
         WiFi.disconnect(true);   // true = 清除 SDK 缓存
-        delay(50);
+        delay(1);
         WiFi.mode(WIFI_OFF);
-        delay(50);
+        delay(1);
         WiFi.mode(WIFI_STA);
         WiFi.setSleepMode(WIFI_MODEM_SLEEP);// 或 WIFI_LIGHT_SLEEP
         // 只允许 STA 接口接收广播（默认就是 STA，但可以显式设置）
@@ -1202,8 +1205,9 @@ bool connectWiFi(bool forceFullReset)
     } else {
         // 软重置：只有之前成功连接过才有效
         WiFi.disconnect(false);    // 不断开 SDK 缓存
-        delay(10);
+        delay(1);
         WiFi.begin();  // 无参数，使用缓存
+        delay(1);
         #if defined(DEBUG_ENABLED_WIFI) || defined(DEBUG_ENABLED_0)
                 //TTL日志：软重置
         Serial.printf("[WiFi-INIT] TTL=%lu | Soft reset, keep current power\n", millis());
@@ -1340,6 +1344,7 @@ void handleWiFiConnection()
     #endif
                     wifiState = WIFI_STATE_DISCONNECTED;
                     disconnectCount = 0;
+                    closeNetdataConnection();   // 立即关闭可能残留的 TCP 连接
                 }
             }
             else{
@@ -1514,7 +1519,7 @@ void updateChartRange()
 // 负责更新监控数据和UI显示
 static void task_cb(lv_task_t *task)
 {
-    delay(10);
+    delay(30);
     #ifdef DEBUG_ENABLED_RAM
     uint32_t task_start = millis();
     static uint32_t last_time = 0;
@@ -1654,7 +1659,7 @@ static void task_cb(lv_task_t *task)
         // last_time = task_start;
         }
 #endif
-    delay(150);
+    delay(70);
 }
 
 void UI_init(void)
@@ -2090,7 +2095,6 @@ void trySwitchToMonitorPage()
 void loop()
 {
     handleAsyncHttp();
-    delay(1);
 
     // ---------- 2. 检查异步请求是否完成 ----------
     bool success;
@@ -2142,7 +2146,6 @@ void loop()
     loopStartCycle = ESP.getCycleCount(); // 记录循环开始
 #endif
     // 【优化】handleWiFiConnection 调用频率控制
-
     handleWiFiConnection();
 
 
