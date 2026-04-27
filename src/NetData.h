@@ -12,7 +12,7 @@
 // 复用单个 WiFiClient，避免连接池开销
 static WiFiClient netdataClient;
 static unsigned long lastNetdataRequestTime = 0;
-static const unsigned long CONNECTION_IDLE_TIMEOUT = 120000; // 120秒空闲后关闭连接
+static const unsigned long CONNECTION_IDLE_TIMEOUT = 3; // 3秒空闲后关闭连接
 
 bool ensureNetdataConnection();
 
@@ -70,6 +70,7 @@ struct AsyncHttpContext {
     int bodyRead = 0;         // 已读字节计数
     String bodyBuffer;        //存储完整响应体
     bool success = false;
+    bool forceReconnect = false; //HTTP_ERROR标记
 };
 
 extern AsyncHttpContext httpCtx;  // 全局或静态
@@ -188,7 +189,7 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
     httpCtx.chartID = String(CHART_CPU) + "," +
                     String(CHART_MEM) + "," +
                     String(CHART_TEMP) + "," +
-                    String(CHART_NET_RX);
+                    String(CHART_NET);
     httpCtx.dimensionFilter = ""; // 批量请求时不使用维度过滤，在解析时处理
     httpCtx.resultData = &dummy;   // 这里传入一个占位引用，实际数据解析由专用函数完成
     httpCtx.state = HTTP_CONNECTING;
@@ -201,7 +202,7 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
-                          "User-Agent: ESP8266-NetData-Monitor\r\n" +
+                          "User-Agent: RM\r\n" +
                           "Accept: application/json\r\n\r\n";
     return true;
 }
@@ -212,29 +213,35 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
  * @return true 表示连接就绪，false 表示连接失败
  */
 bool ensureNetdataConnection() {
-    // 如果已连接，且未超过空闲超时，直接复用
+    // 仅靠 connected() 判定，不清掉可能可用的连接
     if (netdataClient.connected()) {
-        if (millis() - lastNetdataRequestTime < CONNECTION_IDLE_TIMEOUT) {
-            return true;
+        // 清空残留数据
+        while (netdataClient.available()) netdataClient.read();
+        return true;
+    }
+    
+    netdataClient.stop();
+    delay(1);
+    netdataClient.setTimeout(3000);
+    
+    IPAddress ip;
+    if (ipCached) {
+        ip = cachedServerIP;
+    } else {
+        if (WiFi.hostByName(NETDATA_SERVER_IP, ip, 500)) {
+            cachedServerIP = ip;
+            ipCached = true;
         } else {
-            // 空闲超时，主动关闭
-            netdataClient.stop();
+            return false;
         }
     }
     
-    // 需要建立新连接
-    netdataClient.stop(); // 确保干净状态
-    netdataClient.setTimeout(5000); // 5秒超时
-    
-    if (!netdataClient.connect(NETDATA_SERVER_IP, NETDATA_SERVER_PORT)) {
-        #ifdef DEBUG_ENABLED_0
-        Serial.println("NetData connection failed");
-        #endif
+    if (!netdataClient.connect(ip, NETDATA_SERVER_PORT)) {
         return false;
     }
     
     #ifdef DEBUG_ENABLED_0
-    Serial.println("NetData connection established (reused)");
+    Serial.println("New TCP connection");
     #endif
     return true;
 }
@@ -296,6 +303,9 @@ inline void handleAsyncHttp() {
     AsyncHttpContext& ctx = httpCtx;
     unsigned long now = millis();
     const unsigned long TIMEOUT_MS = 5000;
+    
+    // 🔵 新增：记录是否为分块传输
+    static bool isChunked = false;
 
     switch (ctx.state) {
         case HTTP_IDLE:
@@ -304,6 +314,13 @@ inline void handleAsyncHttp() {
             return;
 
         case HTTP_CONNECTING: {
+            // ===== 若连接已存在，直接复用，跳到发送阶段 =====
+            if (ctx.client->connected()) {
+                ctx.state = HTTP_SENDING;
+                ctx.lastActionTime = now;
+                break;
+            }
+            
             IPAddress ip;
             if (ipCached) {
                 ip = cachedServerIP;
@@ -312,12 +329,11 @@ inline void handleAsyncHttp() {
                     cachedServerIP = ip;
                     ipCached = true;
                 } else {
-                    ctx.state = HTTP_ERROR;  // DNS 解析失败
+                    ctx.state = HTTP_ERROR;
                     break;
                 }
             }
             
-            //建立 TCP 连接
             if (ctx.client->connect(ip, NETDATA_SERVER_PORT)) {
                 ctx.state = HTTP_SENDING;
                 ctx.lastActionTime = now;
@@ -329,6 +345,11 @@ inline void handleAsyncHttp() {
 
         case HTTP_SENDING: {
             size_t written = ctx.client->print(ctx.httpRequest);
+#ifdef DEBUG_ENABLED
+            Serial.println("--- HTTP Request ---");
+            Serial.println(ctx.httpRequest);
+            Serial.println("-------------------");
+#endif
             if (written == ctx.httpRequest.length()) {
                 ctx.client->flush();
                 ctx.state = HTTP_WAITING_RESP;
@@ -369,11 +390,14 @@ inline void handleAsyncHttp() {
         }
 
         case HTTP_READING_HEADERS: {
-            // --- 优化：添加读取计数器，每16字节调用一次 yield() ---
             int readCount = 0;
             while (ctx.client->available()) {
                 char c = ctx.client->read();
                 if (c == '\n') {
+#ifdef DEBUG_ENABLED
+                    Serial.print("HDR: ");
+                    Serial.println(ctx.lineBuffer);
+#endif
                     if (ctx.lineBuffer.length() == 0 || ctx.lineBuffer == "\r") {
                         // 头部结束，准备读取 body
                         ctx.state = HTTP_READING_BODY;
@@ -386,15 +410,20 @@ inline void handleAsyncHttp() {
                         val.trim();
                         ctx.contentLength = val.toInt();
                     }
+                    // 🔵 新增：识别分块传输编码
+                    else if (ctx.lineBuffer.startsWith("Transfer-Encoding:")) {
+                        if (ctx.lineBuffer.indexOf("chunked") != -1) {
+                            isChunked = true;
+                        }
+                    }
                     ctx.lineBuffer = "";
                 } else if (c != '\r') {
                     ctx.lineBuffer += c;
                 }
-                // 每处理16个字符，让出CPU避免阻塞
-                if (++readCount >= 16) {
-                    yield();
-                    readCount = 0;
-                }
+                // if (++readCount >= 128) {
+                //     yield();
+                //     readCount = 0;
+                // }
             }
             if (now - ctx.lastActionTime > TIMEOUT_MS && ctx.state == HTTP_READING_HEADERS) {
                 ctx.state = HTTP_ERROR;
@@ -404,20 +433,53 @@ inline void handleAsyncHttp() {
 
         case HTTP_READING_BODY: {
             int readCount = 0;
-            if (ctx.contentLength > 0) {
-                // 有 Content-Length：按长度读取
-                while (ctx.client->available() && ctx.bodyRead < ctx.contentLength) {
-                    char c = ctx.client->read();
-                    ctx.bodyBuffer += c;
-                    ctx.bodyRead++;
+            
+            // 🔵 新增：分块传输解码
+            if (isChunked) {
+                while (ctx.client->available()) {
+                    // 读取 chunk 大小（十六进制行）
+                    String line = ctx.client->readStringUntil('\n');
+                    line.trim();
+                    if (line.length() == 0) continue;          // 忽略空行
+                    unsigned long chunkSize = strtoul(line.c_str(), NULL, 16);
+                    if (chunkSize == 0) break;                 // 终止块 0\r\n
+                    
+                    // 读取 chunk 数据
+                    char* chunkData = new char[chunkSize + 1];
+                    ctx.client->readBytes(chunkData, chunkSize);
+                    chunkData[chunkSize] = '\0';
+                    ctx.bodyBuffer += chunkData;
+                    delete[] chunkData;
+                    
+                    // 跳过 chunk 末尾的 \r\n
+                    if (ctx.client->available()) ctx.client->read();
+                    if (ctx.client->available()) ctx.client->read();
                     ctx.lastActionTime = now;
-                    if (++readCount >= 16) {
-                        yield();
-                        readCount = 0;
+                    yield();
+                }
+                // chunked 解析完成，尝试解析 JSON
+                if (parseBatchNetDataResponse(ctx.bodyBuffer)) {
+                    ctx.success = true;
+                } else {
+                    ctx.success = false;
+                }
+                ctx.state = HTTP_COMPLETED;
+            }
+            // 🔵 有 Content-Length 的常规读取
+            else if (ctx.contentLength > 0) {
+                while (ctx.client->available() && ctx.bodyRead < ctx.contentLength) {
+                    int toRead = min(ctx.contentLength - ctx.bodyRead, 256); // 一次最多读 256 字节
+                    char buf[256];
+                    int len = ctx.client->readBytes(buf, toRead);
+                    if (len > 0) {
+                        ctx.bodyBuffer.concat(buf, len);
+                        ctx.bodyRead += len;
+                        ctx.lastActionTime = now;
                     }
+                    yield(); // 每个大块后 yield 一次即可
                 }
                 if (ctx.bodyRead >= ctx.contentLength) {
-                    // 读取完成，进行解析
+                    // 读取完毕，解析
                     if (ctx.chartID.indexOf(',') != -1) {
                         if (parseBatchNetDataResponse(ctx.bodyBuffer)) {
                             ctx.success = true;
@@ -435,21 +497,20 @@ inline void handleAsyncHttp() {
                 } else if (now - ctx.lastActionTime > TIMEOUT_MS) {
                     ctx.state = HTTP_ERROR;
                 }
-            } else {
-                // 无 Content-Length：读取直到连接关闭
+            }
+            // 🔵 无长度且无分块（极少情况），保底：连接关闭即认为完成
+            else {
                 while (ctx.client->available()) {
                     char c = ctx.client->read();
                     ctx.bodyBuffer += c;
                     ctx.bodyRead++;
                     ctx.lastActionTime = now;
-                    if (++readCount >= 16) {
-                        yield();
-                        readCount = 0;
-                    }
+                    // if (++readCount >= 128) {
+                    //     yield();
+                    //     readCount = 0;
+                    // }
                 }
-                // 连接关闭或超时判断
                 if (!ctx.client->connected() && ctx.bodyBuffer.length() > 0) {
-                    // 连接已关闭且有数据，认为读取完成
                     if (ctx.chartID.indexOf(',') != -1) {
                         if (parseBatchNetDataResponse(ctx.bodyBuffer)) {
                             ctx.success = true;
@@ -467,15 +528,16 @@ inline void handleAsyncHttp() {
                 } else if (now - ctx.lastActionTime > TIMEOUT_MS) {
                     ctx.state = HTTP_ERROR;
                 }
-                // 如果连接仍存在但暂无数据，继续等待（由下一次 loop 处理）
             }
             break;
         }
     }
+    
     if (ctx.state == HTTP_ERROR) {
         ctx.client->stop();
         ctx.success = false;
         ctx.state = HTTP_COMPLETED;
+        ctx.forceReconnect = true;
     }
 }
 
@@ -522,7 +584,7 @@ bool startAsyncNetDataRequest(const String& chartID, NetChartData& data, const S
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
-                          "User-Agent: ESP8266-NetData-Monitor\r\n" +
+                          "User-Agent: RM\r\n" +
                           "Accept: application/json\r\n\r\n";
     return true;
 }
