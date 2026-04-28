@@ -207,6 +207,40 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
     return true;
 }
 
+// ===== 新增：快速请求（仅 CPU + 网络速度）=====
+// 只获取 system.cpu 和 net.wan，不获取 mem 和 temp，大幅降低数据量
+bool startFastNetDataRequest(NetChartData& dummy) {
+    // 检查是否有请求正在进行
+    if (httpCtx.state != HTTP_IDLE && httpCtx.state != HTTP_COMPLETED && httpCtx.state != HTTP_ERROR) {
+        return false;
+    }
+    
+    // 确保连接可用
+    if (!ensureNetdataConnection()) {
+        return false;
+    }
+    
+    // 重置上下文
+    httpCtx = AsyncHttpContext();
+    // 🔴 只请求 CPU 和网络速度
+    httpCtx.chartID = String(CHART_CPU) + "," + String(CHART_NET);
+    httpCtx.dimensionFilter = "";
+    httpCtx.resultData = &dummy;
+    httpCtx.state = HTTP_CONNECTING;
+    httpCtx.lastActionTime = millis();
+    httpCtx.client = &netdataClient;
+    
+    // 构建请求 URL（用法与完整请求一致）
+    String reqRes = "/api/v1/data?chart=" + httpCtx.chartID + 
+                    "&format=json&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2";
+    httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
+                          "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
+                          "Connection: keep-alive\r\n" +
+                          "User-Agent: RM\r\n" +
+                          "Accept: application/json\r\n\r\n";
+    return true;
+}
+
 /**
  * 获取可用的 NetData 客户端连接
  * 自动处理连接复用和重建
@@ -239,6 +273,9 @@ bool ensureNetdataConnection() {
     if (!netdataClient.connect(ip, NETDATA_SERVER_PORT)) {
         return false;
     }
+
+    // 禁用 Nagle 算法，让小包（如 HTTP 请求）即时发出，降低缓冲占用
+    netdataClient.setNoDelay(true);
     
     #ifdef DEBUG_ENABLED_0
     Serial.println("New TCP connection");
