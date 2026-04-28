@@ -22,7 +22,7 @@
 // #define DEBUG_ENABLED_DATA   // 串口查看获取NetData的数据
 // #define DEBUG_ENABLED_WIFI   // 取消注释以启用WiFi调试信息
 
-const char *ssid = "AX";         // 连接WiFi名（此处使用AX为示例）
+const char *ssid = "AX";           // 连接WiFi名（此处使用AX为示例）
                                    // 请将您需要连接的WiFi名填入引号中
 const char *password = "12345678"; // 连接WiFi密码（此处使用12345678为示例）
 // NetData服务器配置
@@ -37,6 +37,15 @@ const char *password = "12345678"; // 连接WiFi密码（此处使用12345678为
 // 维度过滤数据方向
 #define DIM_RX            "received"
 #define DIM_TX            "sent"
+// 注意：维度名必须与 NetData 中实际名称一致，
+// 请根据解析函数（parseBatchNetDataResponse）中使用的维度名调整。
+// 当前解析中使用的维度为：
+//   CPU: "system"  |  网络: "received","sent"  |  内存: 含 "avail"  |  温度: 含 "temp"
+// 下面字符串包含了这些关键字的常见精确名称，如果与实际不符，请通过串口输出一次完整响应调整。
+// 显示不正确可尝试注销parseBatchNetDataResponse中的下面代码，然后查询维度数据修复
+// reqRes += "&dimensions=received,sent,temp,system,avail";
+// 查看维度名称，可在parseBatchNetDataResponse函数中的串口日志方式实时jsonStr；
+
 // 被监控的路由器Ram大小单位MB
 #define CHART_MEM_X   1024.0
 // 网络请求计数
@@ -1205,7 +1214,7 @@ bool connectWiFi(bool forceFullReset)
         Serial.printf("[WiFi-INIT] TTL=%lu | Hard reset, initial power=%.1f dBm\n", 
                      millis(), WIFI_TX_POWER_DBM);
         #endif
-        WiFi.hostname("RouterMonitorPlus");
+        WiFi.hostname("RouterMonitor");
         WiFi.begin(ssid, password);  // 必须传参数
     } else {
         // 软重置：只有之前成功连接过才有效
@@ -1930,7 +1939,8 @@ void setUnusedPinsHiZ()
 {
 #if !defined(DEBUG_ENABLED) && !defined(DEBUG_ENABLED_0) && \
     !defined(DEBUG_ENABLED_TIME) && !defined(DEBUG_ENABLED_RAM)\
-    && !defined(DEBUG_ENABLED_CPU) && !defined(DEBUG_ENABLED_WIFI)
+    && !defined(DEBUG_ENABLED_CPU) && !defined(DEBUG_ENABLED_WIFI)\
+    && !defined(DEBUG_ENABLED_DATA)
     
 
     // NodeMCU v2 可用 GPIO：0,1,2,3,4,5,12,13,14,15,16
@@ -1969,7 +1979,8 @@ void setup()
     /* ---------- 关闭串口 & 释放 TXD0/RXD0 ---------- */
 #if !defined(DEBUG_ENABLED) && !defined(DEBUG_ENABLED_0) && \
     !defined(DEBUG_ENABLED_TIME) && !defined(DEBUG_ENABLED_RAM)\
-    && !defined(DEBUG_ENABLED_CPU) && !defined(DEBUG_ENABLED_WIFI)
+    && !defined(DEBUG_ENABLED_CPU) && !defined(DEBUG_ENABLED_WIFI)\
+    && !defined(DEBUG_ENABLED_DATA)
 
     //Serial.end();           // 关闭 UART0
     pinMode(D10, INPUT);      // TXD0 → 高阻1
@@ -2115,6 +2126,11 @@ void loop()
                     newCPUData = true;
                     newNetRxData = true;
                     newNetTxData = true;
+                    if (requestCycleCount % FULL_REQUEST_INTERVAL == 0) {
+                        newMemData = true;
+                        newTempData = true;
+                    }
+                    requestCycleCount++;                   // 每次请求计数+1
                 } else {
                     #ifdef DEBUG_ENABLED_0
                     Serial.println("Batch data request failed");
@@ -2141,14 +2157,10 @@ void loop()
                 // 每 X 次中，第 X 次执行完整请求（包含 mem、temp），其余只请求 CPU+网络
                 if (requestCycleCount % FULL_REQUEST_INTERVAL == 0) {
                     requestStarted = startBatchNetDataRequest(dummyBatchData);  // 完整请求
-                    newMemData = true;
-                    newTempData = true;
                 } else {
                     requestStarted = startFastNetDataRequest(dummyBatchData);   // 快速请求
                 }
                 
-                requestCycleCount++;                   // 每次请求计数+1
-
                 if (requestStarted) {
                     delay(1);
                     currentRequestPhase = REQ_BATCH;
