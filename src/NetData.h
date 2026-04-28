@@ -94,6 +94,12 @@ extern lv_coord_t down_speed_max;
 lv_coord_t updateNetSeries(lv_coord_t* series, double speed);
 
 bool parseBatchNetDataResponse(const String& jsonStr) {
+#ifdef DEBUG_ENABLED
+    // 打印原始响应 ===
+    Serial.println("=== RAW BATCH RESPONSE ===");
+    Serial.println(jsonStr);
+    Serial.println("=== END ===");
+#endif
     DynamicJsonDocument doc(2560);
     DeserializationError error = deserializeJson(doc, jsonStr);
     if (error) {
@@ -199,6 +205,13 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
     // 构建批量请求 URL（一次性获取所有图表的最新一个数据点）
     String reqRes = "/api/v1/data?chart=" + httpCtx.chartID + 
                     "&format=json&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2";
+    // 【新增】限定只返回我们需要解析的维度，大幅减小响应体积
+    // 注意：维度名必须与 NetData 中实际名称一致，
+    // 请根据解析函数（parseBatchNetDataResponse）中使用的维度名调整。
+    // 当前解析中使用的维度为：
+    //   CPU: "system"  |  网络: "received","sent"  |  内存: 含 "avail"  |  温度: 含 "temp"
+    // 下面字符串包含了这些关键字的常见精确名称，如果与实际不符，请通过串口输出一次完整响应调整。
+    reqRes += "&dimensions=received,sent,temp,system,avail";
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
@@ -222,7 +235,7 @@ bool startFastNetDataRequest(NetChartData& dummy) {
     
     // 重置上下文
     httpCtx = AsyncHttpContext();
-    // 🔴 只请求 CPU 和网络速度
+    //只请求 CPU 和网络速度
     httpCtx.chartID = String(CHART_CPU) + "," + String(CHART_NET);
     httpCtx.dimensionFilter = "";
     httpCtx.resultData = &dummy;
@@ -232,7 +245,9 @@ bool startFastNetDataRequest(NetChartData& dummy) {
     
     // 构建请求 URL（用法与完整请求一致）
     String reqRes = "/api/v1/data?chart=" + httpCtx.chartID + 
-                    "&format=json&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2";
+                    //"&format=json&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2";
+                    "&format=json&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2"+
+                    "&dimensions=system,received,sent";  // <-- 新增此行
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
@@ -275,7 +290,7 @@ bool ensureNetdataConnection() {
     }
 
     // 禁用 Nagle 算法，让小包（如 HTTP 请求）即时发出，降低缓冲占用
-    netdataClient.setNoDelay(true);
+    //netdataClient.setNoDelay(true);
     
     #ifdef DEBUG_ENABLED_0
     Serial.println("New TCP connection");
