@@ -93,85 +93,72 @@ extern lv_coord_t down_speed_max;
 // 前置声明（main.ino 中的辅助函数）
 lv_coord_t updateNetSeries(lv_coord_t* series, double speed);
 
-bool parseBatchNetDataResponse(const String& jsonStr) {
+// ===== 新增函数：解析 format=array 的批量响应 =====
+// 替代原来的 parseBatchNetDataResponse
+bool parseBatchArrayResponse(const String& jsonStr) {
 #ifdef DEBUG_ENABLED
-    // 打印原始响应 ===
-    Serial.println("=== RAW BATCH RESPONSE ===");
-    Serial.println(jsonStr);
-    Serial.println("=== END ===");
+// 打印原始响应 ===
+Serial.println("=== RAW BATCH RESPONSE ===");
+Serial.println(jsonStr);
+Serial.println("=== END ===");
 #endif
-    DynamicJsonDocument doc(2560);
+    // 缓冲区必须足够大，这里用 6144 字节（根据内存情况可微调）
+    DynamicJsonDocument doc(2048);
     DeserializationError error = deserializeJson(doc, jsonStr);
     if (error) {
         #ifdef DEBUG_ENABLED_0
-        Serial.print("Batch parse failed: ");
-        Serial.println(error.f_str());
+        Serial.printf("Batch parse error: %s\n", error.c_str());
+        if (error == DeserializationError::NoMemory)
+            Serial.printf("JSON size: %d bytes, heap: %d\n", jsonStr.length(), ESP.getFreeHeap());
         #endif
         return false;
     }
 
-    JsonArray dimNames = doc["dimension_names"].as<JsonArray>();
-    JsonArray chartIds = doc["chart_ids"].as<JsonArray>();
-    JsonObject resultObj = doc["result"];
-    JsonArray data = resultObj["data"].as<JsonArray>();
-    
-    if (!dimNames || !chartIds || !data || data.size() == 0) {
+    JsonObject root = doc.as<JsonObject>();
+    if (!root.containsKey("latest_values") || !root.containsKey("dimension_names")) {
         #ifdef DEBUG_ENABLED_0
-        Serial.println("Invalid batch response structure");
+        Serial.println("Missing required keys in batch response");
         #endif
         return false;
     }
-    
-    JsonArray row = data[0].as<JsonArray>();
-    if (row.size() < dimNames.size() + 1) return false;
-    
-    // 标志位，记录是否成功获取到温度
-    bool gotTemperature = false;
-    
-    for (size_t i = 0; i < dimNames.size(); i++) {
-        const char* chart = chartIds[i].as<const char*>();
-        const char* dim = dimNames[i].as<const char*>();
-        double value = row[i + 1].as<double>();
-        
-        if (strcmp(chart, "system.cpu") == 0) {
-            if (strcmp(dim, "system") == 0) {
-                cpu_usage = value;
-            }
-        }
-        else if (strcmp(chart, "mem.available") == 0) {
-            if (strstr(dim, "avail") != nullptr) {
-                mem_usage = 100.0 * (1.0 - value / CHART_MEM_X);
-            }
-        }
-        else if (strstr(chart, "sensors.") != nullptr || strstr(chart, "temp") != nullptr) {
-            // 匹配任意温度相关图表，取第一个值
-            if (!gotTemperature) {
-                temp_value = value;
-                gotTemperature = true;
-            }
-        }
-        else if (strcmp(chart, "net.wan") == 0) {
-            double speed_bytes = fabs(value) / 8.0; // 使用绝对值，确保速度为正
-            if (strcmp(dim, "received") == 0) {
-                down_speed = speed_bytes;
-                down_speed_max = updateNetSeries(download_serise, speed_bytes);
-            } else if (strcmp(dim, "sent") == 0) {
-                up_speed = speed_bytes;
-                up_speed_max = updateNetSeries(upload_serise, speed_bytes);
-            }
-        }
+
+    JsonArray latest   = root["latest_values"];
+    JsonArray dimNames = root["dimension_names"];
+
+    if (latest.size() != dimNames.size()) {
+        #ifdef DEBUG_ENABLED_0
+        Serial.println("Dimension count mismatch");
+        #endif
+        return false;
     }
-    
-    
-    #if defined(DEBUG_ENABLED_DATAI) || defined(DEBUG_ENABLED)
-    Serial.println("=== Parsed Data ===");
-    Serial.printf("CPU: %.2f%%\n", cpu_usage);
-    Serial.printf("MEM: %.2f%%\n", mem_usage);
-    Serial.printf("TEMP: %.2f C\n", temp_value);
-    Serial.printf("UP: %.2f K/s, DOWN: %.2f K/s\n", up_speed, down_speed);
-    Serial.println("===================");
+
+    // 遍历维度，根据名称分发
+    for (size_t i = 0; i < dimNames.size(); i++) {
+        const char* dim = dimNames[i];
+        double value    = latest[i];
+
+        if (strcmp(dim, "received") == 0) {
+            down_speed = fabs(value) / 8.0;
+            down_speed_max = updateNetSeries(download_serise, down_speed);
+        } else if (strcmp(dim, "sent") == 0) {
+            up_speed = fabs(value) / 8.0;
+            up_speed_max = updateNetSeries(upload_serise, up_speed);
+        } else if (strcmp(dim, "system") == 0) {
+            cpu_usage = value;
+        } else if (strstr(dim, "avail") != nullptr) {
+            // mem.available 维度可能叫 "avail" 或 "MemAvailable"
+            double avail = value;
+            mem_usage = 100.0 * (1.0 - avail / CHART_MEM_X);
+        } else if (strstr(dim, "temp") != nullptr) {
+            temp_value = value;
+        }
+        // 忽略未知维度
+    }
+
+    #ifdef DEBUG_ENABLED
+    Serial.printf("Parsed CPU:%.2f MEM:%.2f TEMP:%.2f Up:%.2f Down:%.2f\n",
+                  cpu_usage, mem_usage, temp_value, up_speed, down_speed);
     #endif
-    
     return true;
 }
 
@@ -192,10 +179,10 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
     httpCtx = AsyncHttpContext();
     // 组合所有需要监控的图表 ID（用逗号分隔）
     // 修正为使用宏拼接
-    httpCtx.chartID = String(CHART_CPU) + "," +
+    httpCtx.chartID = String(CHART_NET) + "," +
+                    String(CHART_CPU) + "," +
                     String(CHART_MEM) + "," +
-                    String(CHART_TEMP) + "," +
-                    String(CHART_NET);
+                    String(CHART_TEMP);
     httpCtx.dimensionFilter = ""; // 批量请求时不使用维度过滤，在解析时处理
     httpCtx.resultData = &dummy;   // 这里传入一个占位引用，实际数据解析由专用函数完成
     httpCtx.state = HTTP_CONNECTING;
@@ -204,14 +191,14 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
     
     // 构建批量请求 URL（一次性获取所有图表的最新一个数据点）
     String reqRes = "/api/v1/data?chart=" + httpCtx.chartID + 
-                    "&format=json&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2";
+                "&format=array&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2";
     // 【新增】限定只返回我们需要解析的维度，大幅减小响应体积
     // 注意：维度名必须与 NetData 中实际名称一致，
-    // 请根据解析函数（parseBatchNetDataResponse）中使用的维度名调整。
+    // 请根据解析函数（ parseBatchArrayResponse ）中使用的维度名调整。
     // 当前解析中使用的维度为：
     //   CPU: "system"  |  网络: "received","sent"  |  内存: 含 "avail"  |  温度: 含 "temp"
     // 下面字符串包含了这些关键字的常见精确名称，如果与实际不符，请通过串口输出一次完整响应调整。
-    reqRes += "&dimensions=received,sent,temp,system,avail";
+    reqRes += "&dimensions=received,sent,system,avail,temp";
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
@@ -236,7 +223,7 @@ bool startFastNetDataRequest(NetChartData& dummy) {
     // 重置上下文
     httpCtx = AsyncHttpContext();
     //只请求 CPU 和网络速度
-    httpCtx.chartID = String(CHART_CPU) + "," + String(CHART_NET);
+    httpCtx.chartID = String(CHART_NET) + "," + String(CHART_CPU);
     httpCtx.dimensionFilter = "";
     httpCtx.resultData = &dummy;
     httpCtx.state = HTTP_CONNECTING;
@@ -245,9 +232,8 @@ bool startFastNetDataRequest(NetChartData& dummy) {
     
     // 构建请求 URL（用法与完整请求一致）
     String reqRes = "/api/v1/data?chart=" + httpCtx.chartID + 
-                    //"&format=json&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2";
-                    "&format=json&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2"+
-                    "&dimensions=system,received,sent";  // <-- 新增此行
+                    "&format=array&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2"+
+                    "&dimensions=received,sent,system";  // <-- 新增此行
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
@@ -289,8 +275,8 @@ bool ensureNetdataConnection() {
         return false;
     }
 
-    // 禁用 Nagle 算法，让小包（如 HTTP 请求）即时发出，降低缓冲占用
-    //netdataClient.setNoDelay(true);
+    // 启用 Nagle 算法，让小包（如 HTTP 请求）即时发出，降低缓冲占用
+    netdataClient.setNoDelay(false);
     
     #ifdef DEBUG_ENABLED_0
     Serial.println("New TCP connection");
@@ -404,6 +390,8 @@ inline void handleAsyncHttp() {
 #endif
             if (written == ctx.httpRequest.length()) {
                 ctx.client->flush();
+                // 🔽 新增：重置分块标志，避免上次请求污染
+                isChunked = false;
                 ctx.state = HTTP_WAITING_RESP;
                 ctx.lastActionTime = now;
             } else if (now - ctx.lastActionTime > 2000) {
@@ -484,56 +472,76 @@ inline void handleAsyncHttp() {
         }
 
         case HTTP_READING_BODY: {
-            int readCount = 0;
-            
-            // 🔵 新增：分块传输解码
+            const int MAX_BODY_SIZE = 4096;   // 响应体最大允许读取的字节数（足够容纳批量请求响应）
+
+            // ========== 分块传输编码 ==========
             if (isChunked) {
-                while (ctx.client->available()) {
-                    // 读取 chunk 大小（十六进制行）
+                // 尽量一次读完所有 chunk
+                while (ctx.client->available() && ctx.bodyRead < MAX_BODY_SIZE) {
+                    // 读取 chunk 大小
                     String line = ctx.client->readStringUntil('\n');
                     line.trim();
-                    if (line.length() == 0) continue;          // 忽略空行
+                    if (line.length() == 0) continue;
                     unsigned long chunkSize = strtoul(line.c_str(), NULL, 16);
-                    if (chunkSize == 0) break;                 // 终止块 0\r\n
-                    
+                    if (chunkSize == 0) {
+                        // 终止块，解析并结束
+                        if (parseBatchArrayResponse(ctx.bodyBuffer)) {
+                            ctx.success = true;
+                        } else {
+                            ctx.success = false;
+                        }
+                        ctx.state = HTTP_COMPLETED;
+                        break;
+                    }
                     // 读取 chunk 数据
-                    char* chunkData = new char[chunkSize + 1];
-                    ctx.client->readBytes(chunkData, chunkSize);
-                    chunkData[chunkSize] = '\0';
-                    ctx.bodyBuffer += chunkData;
-                    delete[] chunkData;
-                    
+                    int remaining = chunkSize;
+                    while (remaining > 0 && ctx.client->available()) {
+                        int toRead = min(remaining, 1024);
+                        char* chunkData = new char[toRead + 1];
+                        int len = ctx.client->readBytes(chunkData, toRead);
+                        if (len > 0) {
+                            chunkData[len] = '\0';
+                            ctx.bodyBuffer += chunkData;
+                            ctx.bodyRead += len;
+                            remaining -= len;
+                        } else {
+                            delete[] chunkData;
+                            break;   // 无数据可读，退出内循环，等待下次冲刺
+                        }
+                        delete[] chunkData;
+                    }
                     // 跳过 chunk 末尾的 \r\n
-                    if (ctx.client->available()) ctx.client->read();
-                    if (ctx.client->available()) ctx.client->read();
+                    if (ctx.client->available() >= 2) {
+                        ctx.client->read(); ctx.client->read();
+                    }
                     ctx.lastActionTime = now;
-                    yield();
+                    if (ctx.bodyRead >= MAX_BODY_SIZE) break;
                 }
-                // chunked 解析完成，尝试解析 JSON
-                if (parseBatchNetDataResponse(ctx.bodyBuffer)) {
-                    ctx.success = true;
-                } else {
-                    ctx.success = false;
+                // 如果是因为 MAX_BODY_SIZE 限制退出，且没有终止块，设置错误？
+                if (ctx.state != HTTP_COMPLETED && ctx.bodyRead >= MAX_BODY_SIZE) {
+                    ctx.state = HTTP_ERROR;   // 防止死循环
                 }
-                ctx.state = HTTP_COMPLETED;
             }
-            // 🔵 有 Content-Length 的常规读取
+            // ========== 常规 Content-Length ==========
             else if (ctx.contentLength > 0) {
-                while (ctx.client->available() && ctx.bodyRead < ctx.contentLength) {
-                    int toRead = min(ctx.contentLength - ctx.bodyRead, 256); // 一次最多读 256 字节
-                    char buf[256];
-                    int len = ctx.client->readBytes(buf, toRead);
+                // 一次读尽缓冲区中所有可用数据，直到读满 contentLength 或缓冲区暂时空
+                while (ctx.client->available() && ctx.bodyRead < ctx.contentLength && ctx.bodyRead < MAX_BODY_SIZE) {
+                    int toRead = ctx.contentLength - ctx.bodyRead;
+                    if (toRead > 1024) toRead = 1024;   // 单次 read 限制，防止阻塞过久
+                    uint8_t buf[1024];
+                    int len = ctx.client->read(buf, toRead);
                     if (len > 0) {
-                        ctx.bodyBuffer.concat(buf, len);
+                        ctx.bodyBuffer.concat((char*)buf, len);
                         ctx.bodyRead += len;
                         ctx.lastActionTime = now;
+                    } else {
+                        break;    // 无数据，等待下次冲刺
                     }
-                    yield(); // 每个大块后 yield 一次即可
                 }
                 if (ctx.bodyRead >= ctx.contentLength) {
-                    // 读取完毕，解析
+                    // 解析
                     if (ctx.chartID.indexOf(',') != -1) {
-                        if (parseBatchNetDataResponse(ctx.bodyBuffer)) {
+                        if (parseBatchArrayResponse(ctx.bodyBuffer)) {
                             ctx.success = true;
                         } else {
                             ctx.success = false;
@@ -550,21 +558,17 @@ inline void handleAsyncHttp() {
                     ctx.state = HTTP_ERROR;
                 }
             }
-            // 🔵 无长度且无分块（极少情况），保底：连接关闭即认为完成
+            // ========== 无长度无分块（保底） ==========
             else {
-                while (ctx.client->available()) {
+                while (ctx.client->available() && ctx.bodyRead < MAX_BODY_SIZE) {
                     char c = ctx.client->read();
                     ctx.bodyBuffer += c;
                     ctx.bodyRead++;
                     ctx.lastActionTime = now;
-                    // if (++readCount >= 128) {
-                    //     yield();
-                    //     readCount = 0;
-                    // }
                 }
                 if (!ctx.client->connected() && ctx.bodyBuffer.length() > 0) {
                     if (ctx.chartID.indexOf(',') != -1) {
-                        if (parseBatchNetDataResponse(ctx.bodyBuffer)) {
+                        if (parseBatchArrayResponse(ctx.bodyBuffer)) {
                             ctx.success = true;
                         } else {
                             ctx.success = false;
