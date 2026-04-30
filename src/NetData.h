@@ -103,7 +103,7 @@ Serial.println(jsonStr);
 Serial.println("=== END ===");
 #endif
     // 缓冲区必须足够大，这里用 6144 字节（根据内存情况可微调）
-    DynamicJsonDocument doc(2048);
+    DynamicJsonDocument doc(4096);
     DeserializationError error = deserializeJson(doc, jsonStr);
     if (error) {
         #ifdef DEBUG_ENABLED_0
