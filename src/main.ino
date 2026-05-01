@@ -34,9 +34,12 @@ const char *password = "12345678"; // 连接WiFi密码（此处使用12345678为
 #define CHART_CPU         "system.cpu"
 #define CHART_MEM         "mem.available"
 #define CHART_TEMP        "sensors.temp_thermal_zone0_thermal_thermal_zone0_thermal_zone0"
-// 维度过滤数据方向
-#define DIM_RX            "received"
-#define DIM_TX            "sent"
+// 维度过滤数据方向关键词 
+// 交换宏定义可以改变数据显示方向
+#define DIM_TX            "received"
+#define DIM_RX            "sent"
+// #define DIM_RX            "received"
+// #define DIM_TX            "sent"
 // 注意：维度名必须与 NetData 中实际名称一致，
 // 请根据解析函数（ parseBatchArrayResponse）中使用的维度名调整。
 // 当前解析中使用的维度为：
