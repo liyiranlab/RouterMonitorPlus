@@ -43,10 +43,10 @@ const char *password = "12345678"; // 连接WiFi密码（此处使用12345678为
 // 注意：维度名必须与 NetData 中实际名称一致，
 // 请根据解析函数（ parseBatchArrayResponse）中使用的维度名调整。
 // 当前解析中使用的维度为：
-//   CPU: "system"  |  网络: "received","sent"  |  内存: 含 "avail"  |  温度: 含 "temp"
+//   CPU: "system"  |  网络: "DIM_RX","DIM_TX"  |  内存: 含 "avail"  |  温度: 含 "temp"
 // 下面字符串包含了这些关键字的常见精确名称，如果与实际不符，请通过串口输出一次完整响应调整。
 // 显示不正确可尝试注销parseBatchArrayResponse中的下面代码，然后查询维度数据修复
-// reqRes += "&dimensions=received,sent,temp,system,avail";
+// reqRes += "&dimensions="DIM_RX","DIM_TX",temp,system,avail";
 // 查看维度名称，可在parseBatchArrayResponse函数中的串口日志方式实时jsonStr；
 
 // 被监控的路由器Ram大小单位MB
