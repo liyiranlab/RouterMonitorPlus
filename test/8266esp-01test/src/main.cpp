@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 const char* ssid     = "AX"; // 你的热点
-const char* password = "12322525"; // 你的密码
+const char* password = "12345678"; // 你的密码
 void setup() {
     delay(1000); // 上电后等待 1 秒，方便串口调试
     Serial.begin(76800);//76800 921600
