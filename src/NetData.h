@@ -122,8 +122,9 @@ Serial.println("=== END ===");
         return false;
     }
 
-    JsonArray latest   = root["latest_values"];
-    JsonArray dimNames = root["dimension_names"];
+    // ===== 关键修复：显式转换（ArduinoJson v7 要求）=====
+    JsonArray latest   = root["latest_values"].as<JsonArray>();
+    JsonArray dimNames = root["dimension_names"].as<JsonArray>();
 
     if (latest.size() != dimNames.size()) {
         #ifdef DEBUG_ENABLED_0
@@ -137,10 +138,10 @@ Serial.println("=== END ===");
         const char* dim = dimNames[i];
         double value    = latest[i];
 
-        if (strcmp(dim, "received") == 0) {
+        if (strcmp(dim, DIM_RX) == 0) {
             down_speed = fabs(value) / 8.0;
             down_speed_max = updateNetSeries(download_serise, down_speed);
-        } else if (strcmp(dim, "sent") == 0) {
+        } else if (strcmp(dim, DIM_TX) == 0) {
             up_speed = fabs(value) / 8.0;
             up_speed_max = updateNetSeries(upload_serise, up_speed);
         } else if (strcmp(dim, "system") == 0) {
@@ -196,9 +197,9 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
     // 注意：维度名必须与 NetData 中实际名称一致，
     // 请根据解析函数（ parseBatchArrayResponse ）中使用的维度名调整。
     // 当前解析中使用的维度为：
-    //   CPU: "system"  |  网络: "received","sent"  |  内存: 含 "avail"  |  温度: 含 "temp"
+    //   CPU: "system"  |  网络: "DIM_RX","DIM_TX"  |  内存: 含 "avail"  |  温度: 含 "temp"
     // 下面字符串包含了这些关键字的常见精确名称，如果与实际不符，请通过串口输出一次完整响应调整。
-    reqRes += "&dimensions=received,sent,system,avail,temp";
+    reqRes += "&dimensions="DIM_RX","DIM_TX",system,avail,temp";
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
@@ -233,7 +234,7 @@ bool startFastNetDataRequest(NetChartData& dummy) {
     // 构建请求 URL（用法与完整请求一致）
     String reqRes = "/api/v1/data?chart=" + httpCtx.chartID + 
                     "&format=array&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2"+
-                    "&dimensions=received,sent,system";  // <-- 新增此行
+                    "&dimensions="DIM_RX","DIM_TX",system";  // <-- 新增此行
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
