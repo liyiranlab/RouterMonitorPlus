@@ -1213,7 +1213,7 @@ bool connectWiFi(bool forceFullReset)
         Serial.printf("[WiFi-INIT] TTL=%lu | Hard reset, initial power=%.1f dBm\n", 
                      millis(), WIFI_TX_POWER_DBM);
         #endif
-        WiFi.hostname("ROUTERMONITORPLUS_8266_HOSTNAME");
+        WiFi.hostname(ROUTERMONITORPLUS_8266_HOSTNAME);
         WiFi.begin(ssid, password);  // 必须传参数
     } else {
         // 软重置：只有之前成功连接过才有效
