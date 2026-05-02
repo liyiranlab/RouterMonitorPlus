@@ -11,8 +11,6 @@
 
 // 复用单个 WiFiClient，避免连接池开销
 static WiFiClient netdataClient;
-static unsigned long lastNetdataRequestTime = 0;
-static const unsigned long CONNECTION_IDLE_TIMEOUT = 3; // 3秒空闲后关闭连接
 
 bool ensureNetdataConnection();
 
@@ -78,7 +76,6 @@ static IPAddress cachedServerIP;
 static bool ipCached = false;
 
 // ===== 修改点 2：新增批量响应解析函数 =====
-// 在 parseNetDataResponseFromString 函数后面添加以下函数
 // 注意：需要 extern 声明 main.ino 中的全局变量
 extern double cpu_usage;
 extern double mem_usage;
@@ -144,13 +141,13 @@ Serial.println("=== END ===");
         } else if (strcmp(dim, DIM_TX) == 0) {
             up_speed = fabs(value) / 8.0;
             up_speed_max = updateNetSeries(upload_serise, up_speed);
-        } else if (strcmp(dim, "system") == 0) {
+        } else if (strcmp(dim, DIM_CPU) == 0) {
             cpu_usage = value;
-        } else if (strstr(dim, "avail") != nullptr) {
+        } else if (strstr(dim, DIM_MEM) != nullptr) {
             // mem.available 维度可能叫 "avail" 或 "MemAvailable"
             double avail = value;
             mem_usage = 100.0 * (1.0 - avail / CHART_MEM_X);
-        } else if (strstr(dim, "temp") != nullptr) {
+        } else if (strstr(dim, DIM_TEMP) != nullptr) {
             temp_value = value;
         }
         // 忽略未知维度
@@ -164,8 +161,7 @@ Serial.println("=== END ===");
 }
 
 // ===== 修改点 1：新增批量请求启动函数 =====
-// 在 NetData.h 末尾（startAsyncNetDataRequest 后面）添加以下函数
-bool startBatchNetDataRequest(NetChartData& dummy) {
+bool startBatchNetDataRequest() {
     // 检查是否有请求正在进行
     if (httpCtx.state != HTTP_IDLE && httpCtx.state != HTTP_COMPLETED && httpCtx.state != HTTP_ERROR) {
         return false;
@@ -185,7 +181,6 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
                     String(CHART_MEM) + "," +
                     String(CHART_TEMP);
     httpCtx.dimensionFilter = ""; // 批量请求时不使用维度过滤，在解析时处理
-    httpCtx.resultData = &dummy;   // 这里传入一个占位引用，实际数据解析由专用函数完成
     httpCtx.state = HTTP_CONNECTING;
     httpCtx.lastActionTime = millis();
     httpCtx.client = &netdataClient;
@@ -197,9 +192,9 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
     // 注意：维度名必须与 NetData 中实际名称一致，
     // 请根据解析函数（ parseBatchArrayResponse ）中使用的维度名调整。
     // 当前解析中使用的维度为：
-    //   CPU: "system"  |  网络: "DIM_RX","DIM_TX"  |  内存: 含 "avail"  |  温度: 含 "temp"
+    //   CPU: "DIM_CPU"  |  网络: "DIM_RX","DIM_TX"  |  内存: 含 "DIM_MEM" |  温度: 含 "DIM_TEMP"
     // 下面字符串包含了这些关键字的常见精确名称，如果与实际不符，请通过串口输出一次完整响应调整。
-    reqRes += "&dimensions="DIM_RX","DIM_TX",system,avail,temp";
+    reqRes += "&dimensions="DIM_RX","DIM_TX","DIM_CPU","DIM_MEM","DIM_TEMP"";
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
@@ -210,7 +205,7 @@ bool startBatchNetDataRequest(NetChartData& dummy) {
 
 // ===== 新增：快速请求（仅 CPU + 网络速度）=====
 // 只获取 system.cpu 和 net.wan，不获取 mem 和 temp，大幅降低数据量
-bool startFastNetDataRequest(NetChartData& dummy) {
+bool startFastNetDataRequest() {
     // 检查是否有请求正在进行
     if (httpCtx.state != HTTP_IDLE && httpCtx.state != HTTP_COMPLETED && httpCtx.state != HTTP_ERROR) {
         return false;
@@ -226,7 +221,6 @@ bool startFastNetDataRequest(NetChartData& dummy) {
     //只请求 CPU 和网络速度
     httpCtx.chartID = String(CHART_NET) + "," + String(CHART_CPU);
     httpCtx.dimensionFilter = "";
-    httpCtx.resultData = &dummy;
     httpCtx.state = HTTP_CONNECTING;
     httpCtx.lastActionTime = millis();
     httpCtx.client = &netdataClient;
@@ -234,7 +228,7 @@ bool startFastNetDataRequest(NetChartData& dummy) {
     // 构建请求 URL（用法与完整请求一致）
     String reqRes = "/api/v1/data?chart=" + httpCtx.chartID + 
                     "&format=array&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2"+
-                    "&dimensions="DIM_RX","DIM_TX",system";  // <-- 新增此行
+                    "&dimensions="DIM_RX","DIM_TX","DIM_CPU"";  // <-- 新增此行
     httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
                           "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
                           "Connection: keep-alive\r\n" +
@@ -286,55 +280,10 @@ bool ensureNetdataConnection() {
 }
 
 /**
- * 标记一次请求已完成，更新最后使用时间
- */
-void markNetdataRequestDone() {
-    lastNetdataRequestTime = millis();
-}
-
-/**
  * 强制关闭 NetData 连接（例如在进入深睡眠前调用）
  */
 void closeNetdataConnection() {
     netdataClient.stop();
-}
-
-// 解析NetData响应
-// 从 String 解析 NetData 响应（零拷贝流，直接传入 JSON 字符串）
-bool parseNetDataResponseFromString(const String& jsonStr, NetChartData& data) {
-    DynamicJsonDocument doc(8192);
-    DeserializationError error = deserializeJson(doc, jsonStr);
-    if (error) {
-        #ifdef DEBUG_ENABLED_0
-        Serial.print(F("deserializeJson() failed: "));
-        Serial.println(error.f_str());
-        #endif
-        return false;
-    }
-
-    data.api = doc["api"];
-    data.id = doc["id"].as<String>();
-    data.name = doc["name"].as<String>();
-    data.view_update_every = doc["view_update_every"];
-    data.update_every = doc["update_every"];
-    data.first_entry = doc["first_entry"];
-    data.last_entry = doc["last_entry"];
-    data.after = doc["after"];
-    data.before = doc["before"];
-    data.group = doc["group"].as<String>();
-    data.options_0 = doc["options"][0].as<String>();
-    data.options_1 = doc["options"][1].as<String>();
-    data.dimension_names = doc["dimension_names"];
-    data.dimension_ids = doc["dimension_ids"];
-    data.latest_values = doc["latest_values"];
-    data.view_latest_values = doc["view_latest_values"];
-    data.dimensions = doc["dimensions"];
-    data.points = doc["points"];
-    data.format = doc["format"].as<String>();
-    data.result = doc["result"];
-    data.min = doc["min"];
-    data.max = doc["max"];
-    return true;
 }
 
 // ---------- 异步 HTTP 状态机推进函数 ----------
@@ -473,13 +422,11 @@ inline void handleAsyncHttp() {
         }
 
         case HTTP_READING_BODY: {
-            const int MAX_BODY_SIZE = 4096;   // 响应体最大允许读取的字节数（足够容纳批量请求响应）
+            const int MAX_BODY_SIZE = 4096;
 
             // ========== 分块传输编码 ==========
             if (isChunked) {
-                // 尽量一次读完所有 chunk
                 while (ctx.client->available() && ctx.bodyRead < MAX_BODY_SIZE) {
-                    // 读取 chunk 大小
                     String line = ctx.client->readStringUntil('\n');
                     line.trim();
                     if (line.length() == 0) continue;
@@ -494,11 +441,10 @@ inline void handleAsyncHttp() {
                         ctx.state = HTTP_COMPLETED;
                         break;
                     }
-                    // 读取 chunk 数据
                     int remaining = chunkSize;
                     while (remaining > 0 && ctx.client->available()) {
                         int toRead = min(remaining, 1024);
-                        char* chunkData = new char[toRead + 1];
+                        char chunkData[1025];                        // 栈数组避免堆碎片
                         int len = ctx.client->readBytes(chunkData, toRead);
                         if (len > 0) {
                             chunkData[len] = '\0';
@@ -506,29 +452,25 @@ inline void handleAsyncHttp() {
                             ctx.bodyRead += len;
                             remaining -= len;
                         } else {
-                            delete[] chunkData;
-                            break;   // 无数据可读，退出内循环，等待下次冲刺
+                            break;
                         }
-                        delete[] chunkData;
                     }
-                    // 跳过 chunk 末尾的 \r\n
+                    // 跳过 chunk 末尾 \r\n
                     if (ctx.client->available() >= 2) {
                         ctx.client->read(); ctx.client->read();
                     }
                     ctx.lastActionTime = now;
                     if (ctx.bodyRead >= MAX_BODY_SIZE) break;
                 }
-                // 如果是因为 MAX_BODY_SIZE 限制退出，且没有终止块，设置错误？
                 if (ctx.state != HTTP_COMPLETED && ctx.bodyRead >= MAX_BODY_SIZE) {
-                    ctx.state = HTTP_ERROR;   // 防止死循环
+                    ctx.state = HTTP_ERROR;
                 }
             }
             // ========== 常规 Content-Length ==========
             else if (ctx.contentLength > 0) {
-                // 一次读尽缓冲区中所有可用数据，直到读满 contentLength 或缓冲区暂时空
                 while (ctx.client->available() && ctx.bodyRead < ctx.contentLength && ctx.bodyRead < MAX_BODY_SIZE) {
                     int toRead = ctx.contentLength - ctx.bodyRead;
-                    if (toRead > 1024) toRead = 1024;   // 单次 read 限制，防止阻塞过久
+                    if (toRead > 1024) toRead = 1024;
                     uint8_t buf[1024];
                     int len = ctx.client->read(buf, toRead);
                     if (len > 0) {
@@ -536,23 +478,14 @@ inline void handleAsyncHttp() {
                         ctx.bodyRead += len;
                         ctx.lastActionTime = now;
                     } else {
-                        break;    // 无数据，等待下次冲刺
+                        break;
                     }
                 }
                 if (ctx.bodyRead >= ctx.contentLength) {
-                    // 解析
-                    if (ctx.chartID.indexOf(',') != -1) {
-                        if (parseBatchArrayResponse(ctx.bodyBuffer)) {
-                            ctx.success = true;
-                        } else {
-                            ctx.success = false;
-                        }
+                    if (parseBatchArrayResponse(ctx.bodyBuffer)) {
+                        ctx.success = true;
                     } else {
-                        if (parseNetDataResponseFromString(ctx.bodyBuffer, *ctx.resultData)) {
-                            ctx.success = true;
-                        } else {
-                            ctx.success = false;
-                        }
+                        ctx.success = false;
                     }
                     ctx.state = HTTP_COMPLETED;
                 } else if (now - ctx.lastActionTime > TIMEOUT_MS) {
@@ -568,18 +501,10 @@ inline void handleAsyncHttp() {
                     ctx.lastActionTime = now;
                 }
                 if (!ctx.client->connected() && ctx.bodyBuffer.length() > 0) {
-                    if (ctx.chartID.indexOf(',') != -1) {
-                        if (parseBatchArrayResponse(ctx.bodyBuffer)) {
-                            ctx.success = true;
-                        } else {
-                            ctx.success = false;
-                        }
+                    if (parseBatchArrayResponse(ctx.bodyBuffer)) {
+                        ctx.success = true;
                     } else {
-                        if (parseNetDataResponseFromString(ctx.bodyBuffer, *ctx.resultData)) {
-                            ctx.success = true;
-                        } else {
-                            ctx.success = false;
-                        }
+                        ctx.success = false;
                     }
                     ctx.state = HTTP_COMPLETED;
                 } else if (now - ctx.lastActionTime > TIMEOUT_MS) {
@@ -603,47 +528,9 @@ inline bool isAsyncHttpDone(bool& success) {
     if (httpCtx.state == HTTP_COMPLETED) {
         success = httpCtx.success;
         httpCtx.state = HTTP_IDLE;
-        // 请求完成，更新最后使用时间
-        markNetdataRequestDone();
         return true;
     }
     return false;
-}
-
-// ---------- 启动异步数据请求 ----------
-bool startAsyncNetDataRequest(const String& chartID, NetChartData& data, const String& dimFilter) {
-    // 检查是否有请求正在进行
-    if (httpCtx.state != HTTP_IDLE && httpCtx.state != HTTP_COMPLETED && httpCtx.state != HTTP_ERROR) {
-        return false; // 上一请求未结束
-    }
-    
-    // 确保连接可用
-    if (!ensureNetdataConnection()) {
-        #ifdef DEBUG_ENABLED_0
-        Serial.println("Failed to establish NetData connection");
-        #endif
-        return false;
-    }
-    
-    // 重置上下文
-    httpCtx = AsyncHttpContext();
-    httpCtx.chartID = chartID;
-    httpCtx.dimensionFilter = dimFilter;
-    httpCtx.resultData = &data;
-    httpCtx.state = HTTP_CONNECTING;
-    httpCtx.lastActionTime = millis();
-    httpCtx.client = &netdataClient;  // 指向全局 client
-    
-    // 构建请求字符串
-    String reqRes = "/api/v1/data?chart=" + chartID + 
-                    "&format=json&points=1&group=average&gtime=0&options=s%7Cjsonwrap%7Cnonzero&after=-2";
-    if (dimFilter.length() > 0) reqRes += "&dimensions=" + dimFilter;
-    httpCtx.httpRequest = "GET " + reqRes + " HTTP/1.1\r\n" + 
-                          "Host: " + String(NETDATA_SERVER_IP) + "\r\n" + 
-                          "Connection: keep-alive\r\n" +
-                          "User-Agent: RM\r\n" +
-                          "Accept: application/json\r\n\r\n";
-    return true;
 }
 
 #endif
