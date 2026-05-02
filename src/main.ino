@@ -34,27 +34,34 @@ const char *password = "12345678"; // 连接WiFi密码（此处使用12345678为
 #define CHART_CPU         "system.cpu"
 #define CHART_MEM         "mem.available"
 #define CHART_TEMP        "sensors.temp_thermal_zone0_thermal_thermal_zone0_thermal_zone0"
-// 维度过滤数据方向关键词 
+// 被监控的路由器Ram大小单位MB
+#define CHART_MEM_X   1024.0
+// 维度过滤数据是各个监控值下一级的关键词，用来确定获取到的数据分别是什么值 
 // 交换宏定义可以改变数据显示方向
 #define DIM_RX            "received"
 #define DIM_TX            "sent"
-//#define DIM_TX            "received"
-//#define DIM_RX            "sent"
+// #define DIM_TX            "received"
+// #define DIM_RX            "sent"
 // 注意：维度名必须与 NetData 中实际名称一致，
 // 请根据解析函数（ parseBatchArrayResponse）中使用的维度名调整。
 // 当前解析中使用的维度为：
-//   CPU: "system"  |  网络: "DIM_RX","DIM_TX"  |  内存: 含 "avail"  |  温度: 含 "temp"
+//   CPU: "DIM_CPU"  |  网络: "DIM_RX","DIM_TX"  |  内存: 含 "DIM_MEM" |  温度: 含 "DIM_TEMP"
 // 下面字符串包含了这些关键字的常见精确名称，如果与实际不符，请通过串口输出一次完整响应调整。
 // 显示不正确可尝试注销parseBatchArrayResponse中的下面代码，然后查询维度数据修复
-// reqRes += "&dimensions="DIM_RX","DIM_TX",temp,system,avail";
+// reqRes += "&dimensions="DIM_RX","DIM_TX","DIM_CPU","DIM_MEM","DIM_TEMP"";
 // 查看维度名称，可在parseBatchArrayResponse函数中的串口日志方式实时jsonStr；
 
-// 被监控的路由器Ram大小单位MB
-#define CHART_MEM_X   1024.0
+// 路由器CPU维度数据
+#define DIM_CPU            "system"
+// 路由器Ram维度数据
+#define DIM_MEM            "avail"
+// 路由器CPU温度维度数据
+#define DIM_TEMP           "temp"
+
 //路由器中设备hostname
 #define ROUTERMONITORPLUS_8266_HOSTNAME "RouterMonitorPlus"
 //#define ROUTERMONITORPLUS_8266_HOSTNAME "RouterMonitor"
-     
+
 // 深睡眠总开关： true  启用深睡眠功能， false  完全禁用深睡眠
 #define DEEP_SLEEP_ENABLED false
 // 深睡眠时间段（24h制,精确到分钟） 定时
@@ -86,11 +93,11 @@ static uint8_t requestCycleCount = 0;
 #define DEFAULT_BATCH_INTERVAL 1000       // 批量请求间隔基准值（默认 1000ms）
 // ===== 控制全量数据请求的间隔次数 =====
 // 每 FULL_REQUEST_INTERVAL 次请求中，第1次获取全部数据，剩余次数仅获取 CPU + 网速
-// 默认值 5 表示每5秒才有1秒请求内存和温度，其余4秒只请求变化快的指标
+// 默认值 5 表示每隔5秒请求一次内存和温度，其余4秒只请求变化快的指标cpu，网速
 #define FULL_REQUEST_INTERVAL 5
 // 全局变量 task_cb 完成时刻标记
 unsigned long lastUiUpdateDone = 0;   // task_cb 完成时刻
-unsigned long batchRequestInterval = DEFAULT_BATCH_INTERVAL; // 动态调整的请求间隔
+const unsigned long batchRequestInterval = 300;
 const unsigned long UI_WIFI_MARGIN = 100; // UI 完成到允许发起请求的最小间隔(ms)
 
 #include <lvgl.h>
@@ -173,7 +180,6 @@ unsigned long gracePeriodEnd = 0;     // 宽限期结束时间
 const unsigned long NTP_VALID_DURATION = 30 * 60 * 1000;  // 30分钟
 const unsigned long FORCE_SYNC_INTERVAL = 30 * 60 * 1000; // 深睡眠前半小时强制同步
 
-using namespace std;
 bool isLoggedIn = false; // 新增：登录状态标志
 unsigned long lastRefreshTime = 0;
 const unsigned long LOGGED_IN_REFRESH_INTERVAL = 499; // 登录后屏幕刷新间隔(ms)待机时间 不建议修改
@@ -269,8 +275,6 @@ static lv_chart_series_t *ser1;
 static lv_chart_series_t *ser2;
 
 static lv_obj_t *wifi_status_led = NULL;  // WiFi状态指示灯
-
-NetChartData netChartData;
 
 // ===== 异步数据请求调度器 =====
 enum DataRequestPhase {
@@ -392,68 +396,67 @@ void analyzeCpuUsage() {
 }
 #endif
 
-#if defined(DEBUG_ENABLED_WIFI) || defined(DEBUG_ENABLED_0)
-#define WIFI_POWER_LOG(oldP, newP, rssi, reason) \
-    do { \
-        Serial.printf("[WiFi-PWR] TTL=%lu | RSSI=%d | %s %.1f->%.1f dBm | Reason: %s\n", \
-                     millis(), rssi, \
-                     oldP < newP ? "UP" : (oldP > newP ? "DOWN" : "  KEEP"), \
-                     oldP, newP, reason); \
-    } while(0)
-#else
-#define WIFI_POWER_LOG(oldP, newP, rssi, reason) ((void)0)
-#endif
-
 // ===== 设置WiFi发射功率 =====
 // power_dBm: 0.0 ~ 20.5 dBm
 void setWiFiTxPower(float power_dBm) {
-    // 限制功率范围
     if (power_dBm < 0.0) power_dBm = 0.0;
     if (power_dBm > 20.5) power_dBm = 20.5;
-    
+
     WiFi.setOutputPower(power_dBm);
-    
+
     #if defined(DEBUG_ENABLED_WIFI) || defined(DEBUG_ENABLED_0)
-    // 【新增】TTL日志：功率设置确认
-    Serial.printf("[WiFi-PWR] TTL=%lu | setOutputPower(%.1f dBm) OK\n", millis(), power_dBm);
+    static float lastLoggedPower = -1.0;
+    if (fabs(lastLoggedPower - power_dBm) > 0.1) { // 避免重复打印相同值
+        Serial.printf("[WiFi-PWR] TTL=%lu | setOutputPower(%.1f dBm)\n", millis(), power_dBm);
+        lastLoggedPower = power_dBm;
+    }
     #endif
 }
 
 // 动态调整发射功率（基于RSSI）
 // ===== 优化版动态功率调整 =====
-// 将初始功率和默认功率分离，currentPower 初始为 WIFI_TX_POWER_DBM。
 // 在 -60~-70dBm 区间，目标设为 16.5，使功率逐步回归默认值。
 // 增加功率渐变步长 POWER_STEP = 1.0，避免跳变。
 // 滞后计数改为 3 次，更稳定。当连接后检查频率为 20 秒或 60 秒时，约 1~3 分钟完成一次功率切换，合理。
+// ===== 动态功率调整的内部状态（改为文件作用域） =====
+static float currentPower = WIFI_TX_POWER_DBM;
+static float targetPower = currentPower;
+static int stableCount = 0;
+// 重置动态功率调整状态（在重连成功后调用）
+void resetDynamicPowerState() {
+    currentPower = WIFI_TX_POWER_DBM;
+    targetPower = currentPower;
+    stableCount = 0;
+    // 立即将硬件功率也重置为默认值
+    setWiFiTxPower(WIFI_TX_POWER_DBM);
+    #if defined(DEBUG_ENABLED_WIFI) || defined(DEBUG_ENABLED_0)
+    Serial.printf("[WiFi-PWR] TTL=%lu | State reset to default %.1f dBm\n", millis(), WIFI_TX_POWER_DBM);
+    #endif
+}
+
 void dynamicAdjustTxPower(int currentRSSI) {
     if (!ENABLE_DYNAMIC_TX_POWER) return;
 
-    static float currentPower = WIFI_TX_POWER_DBM;
-    static float targetPower = currentPower;
-    static int stableCount = 0;          // 目标未变次数
-    static int lastRSSI = currentRSSI;   // 用于判断趋势
-    const int HYSTERESIS_COUNT = 3;      // 连续 3 次确认才切换
-    const float POWER_STEP = 1.0;        // 每次最多调整 1 dBm（平滑）
+    const float POWER_STEP = 1.0;        // 每次最多调整 1 dBm
     const float WEAK_MAX_POWER = 20.5;
     const float MEDIUM_POWER = 18.5;
     const float DEFAULT_POWER = 16.5;
     const float LOW_POWER = 12.0;
 
-    // 根据 RSSI 计算理想目标功率（不考虑滞后）
+    // 简化的 RSSI 阶梯
     float idealPower;
-    if (currentRSSI > RSSI_GOOD_THRESHOLD + 5) {         // > -55 dBm
+    if (currentRSSI > RSSI_GOOD_THRESHOLD) {               // > -65 dBm
         idealPower = LOW_POWER;
-    } else if (currentRSSI > RSSI_GOOD_THRESHOLD) {      // -55 ~ -60 dBm
-        idealPower = LOW_POWER;
-    } else if (currentRSSI >= RSSI_MEDIUM_THRESHOLD) {   // -60 ~ -70 dBm
-        idealPower = DEFAULT_POWER;                       // 向默认功率回归
-    } else if (currentRSSI >= RSSI_MEDIUM_THRESHOLD - 5) {// -70 ~ -75 dBm
+    } else if (currentRSSI >= RSSI_MEDIUM_THRESHOLD) {     // -75 ~ -65 dBm
+        idealPower = DEFAULT_POWER;
+    } else if (currentRSSI >= RSSI_MEDIUM_THRESHOLD - 5) { // -80 ~ -75 dBm
         idealPower = MEDIUM_POWER;
-    } else {                                              // < -75 dBm
+    } else {                                               // < -80 dBm
         idealPower = WEAK_MAX_POWER;
     }
 
-    // 滞后处理：只有当 idealPower 连续 HYSTERESIS_COUNT 次不变，才认定为稳定目标
+    // 滞后处理：目标连续稳定 HYSTERESIS_COUNT 次才实际调整
+    const int HYSTERESIS_COUNT = 3;
     if (idealPower != targetPower) {
         targetPower = idealPower;
         stableCount = 0;
@@ -461,8 +464,7 @@ void dynamicAdjustTxPower(int currentRSSI) {
         stableCount++;
     }
 
-    // 只有目标稳定且与当前功率不同时，才执行调整
-    if (stableCount >= HYSTERESIS_COUNT && abs(currentPower - targetPower) > 0.1) {
+    if (stableCount >= HYSTERESIS_COUNT && fabs(currentPower - targetPower) > 0.1) {
         float newPower;
         if (targetPower > currentPower) {
             newPower = currentPower + POWER_STEP;
@@ -472,13 +474,11 @@ void dynamicAdjustTxPower(int currentRSSI) {
             if (newPower < targetPower) newPower = targetPower;
         }
 
-        WIFI_POWER_LOG(currentPower, newPower, currentRSSI, "RSSI-based");
+        // 直接调用 setWiFiTxPower，该函数内部会打印日志（如果宏启用）
         setWiFiTxPower(newPower);
         currentPower = newPower;
-        stableCount = 0;   // 重置计数，等待下一次稳定
+        stableCount = 0;
     }
-
-    lastRSSI = currentRSSI;
 }
 
 // ===== 新增：状态转换函数 =====
@@ -996,26 +996,10 @@ void actualEnterDeepSleep(uint32_t seconds, bool alreadyCompensated = false)
     Serial.printf("Actual sleep: %u sec, Remaining: %u sec\n", actualSleep, remaining);
     #endif
 
-    // 关闭显示
-    setDisplayState(false);
-
-    // 优化后：单次断开 + 强制射频关闭
-    closeNetdataConnection();  // 关闭 NetData 连接
-    delay(1);
-    WiFi.disconnect(true);   // 清除连接状态
-    delay(1);
-    WiFi.mode(WIFI_OFF);     // 关闭 WiFi 模式
-    delay(1);
-    WiFi.forceSleepBegin();  // 强制射频进入睡眠（比 mode OFF 更省电）
-    delay(1);              // 确保射频完全关闭
-        
-        // 更新WiFi状态
-        wifiState = WIFI_STATE_DISCONNECTED;
-
     // 存储唤醒标记和剩余睡眠时间
     RTCData rtcData;
     rtcData.marker = 0xA5;
-    rtcData.compensated = alreadyCompensated ? 0x01 : 0x00;  // 【位置2】根据实际状态设置
+    rtcData.compensated = compensated ? 0x01 : 0x00;  // 根据实际状态设置
     rtcData.padding[0] = 0;
     rtcData.padding[1] = 0;
     rtcData.remaining = remaining;
@@ -1028,7 +1012,7 @@ void actualEnterDeepSleep(uint32_t seconds, bool alreadyCompensated = false)
     ESP.rtcUserMemoryRead(RTC_ADDR, (uint32_t *)&verifyData, sizeof(verifyData));
 
     bool writeOK = (verifyData.marker == 0xA5) &&
-                (verifyData.compensated == rtcData.compensated) &&  // ✅ 新增：验证补偿标志
+                (verifyData.compensated == rtcData.compensated) &&  // 验证补偿标志
                 (verifyData.remaining == remaining);
 
     if (!writeOK) {
@@ -1043,6 +1027,23 @@ void actualEnterDeepSleep(uint32_t seconds, bool alreadyCompensated = false)
         changeDeviceState(STATE_NORMAL);
         return;
     }
+
+    // 仅在确认必须进入深睡眠后，才关闭显示和WiFi
+    // 关闭显示
+    setDisplayState(false);
+
+    // 优化后：单次断开 + 强制射频关闭
+    closeNetdataConnection();  // 关闭 NetData 连接
+    delay(1);
+    WiFi.disconnect(true);   // 清除连接状态
+    delay(1);
+    WiFi.mode(WIFI_OFF);     // 关闭 WiFi 模式
+    delay(1);
+    WiFi.forceSleepBegin();  // 强制射频进入睡眠（比 mode OFF 更省电）
+    delay(1);              // 确保射频完全关闭
+    
+    // 更新WiFi状态
+    wifiState = WIFI_STATE_DISCONNECTED;
 
     #ifdef DEBUG_ENABLED_0
     Serial.printf("Enter deep-sleep for %lu seconds\n", actualSleep);
@@ -1238,8 +1239,6 @@ bool connectWiFi(bool forceFullReset)
 // ===== 3： handleWiFiConnection() =====
 void handleWiFiConnection()
 {
-    // // ===== 屏幕正在刷新时直接返回，避免 WiFi 操作干扰 =====
-    // if (screenRefreshing) return;
     static unsigned long lastWiFiCheckTime = 0;
     unsigned long currentMillis = millis();
 
@@ -1262,16 +1261,6 @@ void handleWiFiConnection()
     // ===== 睡眠状态处理（保持不变）=====
     if (deviceState == STATE_DEEP_SLEEP || deviceState == STATE_PRE_SLEEP)
     {
-        if (WiFi.status() == WL_CONNECTED)
-        {
-            #ifdef DEBUG_ENABLED_0
-            Serial.println("Disconnecting WiFi due to sleep state\n");
-            #endif
-            for (int i = 0; i < 3; i++) {
-                WiFi.disconnect(true);
-            }
-            wifiState = WIFI_STATE_DISCONNECTED;
-        }
         return;
     }
 
@@ -1284,16 +1273,8 @@ void handleWiFiConnection()
             
             if (timeCheck.inSleepWindow &&
                 (deviceState == STATE_PRE_SLEEP ||
-                (deviceState == STATE_GRACE_PERIOD && millis() >= gracePeriodEnd)))
-            {
-                if (WiFi.status() == WL_CONNECTED)
-                {
-#if defined(DEBUG_ENABLED_WIFI) || defined(DEBUG_ENABLED_0)
-                    Serial.println("Disconnecting WiFi due to sleep window\n");
-#endif
-                    WiFi.disconnect();
-                    wifiState = WIFI_STATE_DISCONNECTED;
-                }
+                (deviceState == STATE_GRACE_PERIOD && millis() >= gracePeriodEnd))) {
+                // 处于睡眠窗口，跳过后续WiFi连接/重连逻辑
                 return;
             }
         }
@@ -1304,11 +1285,12 @@ void handleWiFiConnection()
     {
     case WIFI_STATE_CONNECTING:
         // 检查连接是否成功
-        if (WiFi.status() == WL_CONNECTED)
-        {
+        if (WiFi.status() == WL_CONNECTED) {
             wifiState = WIFI_STATE_CONNECTED;
             wifiReconnectAttempts = 0;
             hasEverConnected = true;  // 标记已成功连接过
+            // ========== 重置动态功率状态 ==========
+            resetDynamicPowerState();
 
 #if defined(DEBUG_ENABLED_WIFI) || defined(DEBUG_ENABLED_0)
             Serial.println("WiFi connected!\n");
@@ -1529,10 +1511,6 @@ void updateChartRange()
 // 负责更新监控数据和UI显示
 static void task_cb(lv_task_t *task)
 {
-    // if (isLoggedIn) {
-    // delay(200);
-    // }
-    //screenRefreshing = true;
     #ifdef DEBUG_ENABLED_RAM
     uint32_t task_start = millis();
     static uint32_t last_time = 0;
@@ -1672,23 +1650,10 @@ static void task_cb(lv_task_t *task)
         // last_time = task_start;
         }
 #endif
-//screenRefreshing = false;
-// 在 task_cb 时间戳计数
-    // ===== 新增：记录 UI 刷新完成，并调整下一次请求间隔 =====
-    lastUiUpdateDone = millis();
 
-    if (wifiState == WIFI_STATE_CONNECTED && !(newCPUData || newNetRxData || newNetTxData)) {
-        unsigned long now = millis();
-        unsigned long nextTaskCbTime = now + 1000; // task_cb 自身周期 1000ms
-        unsigned long idealRequestTime = now + 300;
-        if (idealRequestTime + 200 < nextTaskCbTime) {
-            batchRequestInterval = 300;
-        } else {
-            batchRequestInterval = (nextTaskCbTime + UI_WIFI_MARGIN) - now;
-        }
-    } else {
-        batchRequestInterval = DEFAULT_BATCH_INTERVAL;   // <-- 这里用宏
-    }
+// 在 task_cb 时间戳计数
+    // // ===== 新增：记录 UI 刷新完成，并调整下一次请求间隔 =====
+    lastUiUpdateDone = millis();
 }
 
 void UI_init(void)
@@ -2156,6 +2121,7 @@ void loop()
                     newCPUData = true;
                     newNetRxData = true;
                     newNetTxData = true;
+                    // 通过requestCycleCount计数器判断是否更新了完整数据
                     if (requestCycleCount % FULL_REQUEST_INTERVAL == 0) {
                         newMemData = true;
                         newTempData = true;
@@ -2182,14 +2148,13 @@ void loop()
         if (millis() - lastBatchRequest >= batchRequestInterval) {
             if (currentRequestPhase == REQ_IDLE && !hasUnshownData &&
                 (millis() - lastUiUpdateDone >= UI_WIFI_MARGIN))  {
-                static NetChartData dummyBatchData;
                 bool requestStarted = false;
                  
                 // 每 X 次中，第 X 次执行完整请求（包含 mem、temp），其余只请求 CPU+网络
                 if (requestCycleCount % FULL_REQUEST_INTERVAL == 0) {
-                    requestStarted = startBatchNetDataRequest(dummyBatchData);  // 完整请求
+                    requestStarted = startBatchNetDataRequest();  // 完整请求
                 } else {
-                    requestStarted = startFastNetDataRequest(dummyBatchData);   // 快速请求
+                    requestStarted = startFastNetDataRequest();   // 快速请求
                 }
                 
                 if (requestStarted) {
