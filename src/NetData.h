@@ -26,41 +26,11 @@ enum HttpRequestState {
     HTTP_ERROR
 };
 
-class NetChartData
-{
-public:
-    int api;
-    String id;
-    String name;
-
-    int view_update_every;
-    int update_every;
-    long first_entry;
-    long last_entry;
-    long before;
-    long after;
-    String group;
-    String options_0;
-    String options_1;
-
-    JsonArray dimension_names;
-    JsonArray dimension_ids;
-    JsonArray latest_values;
-    JsonArray view_latest_values;
-    int dimensions;
-    int points;
-    String format;
-    JsonArray result;
-    double min;
-    double max;
-};
-
 struct AsyncHttpContext {
     HttpRequestState state = HTTP_IDLE;
     WiFiClient* client = nullptr;
     String chartID;
     String dimensionFilter;
-    NetChartData* resultData;
     unsigned long lastActionTime;
     String httpRequest;
     String lineBuffer;        // 行缓冲区
@@ -75,15 +45,14 @@ extern AsyncHttpContext httpCtx;  // 全局或静态
 static IPAddress cachedServerIP;
 static bool ipCached = false;
 
-// ===== 修改点 2：新增批量响应解析函数 =====
 // 注意：需要 extern 声明 main.ino 中的全局变量
 extern double cpu_usage;
 extern double mem_usage;
 extern double temp_value;
 extern double up_speed;
 extern double down_speed;
-extern lv_coord_t upload_serise[10];
-extern lv_coord_t download_serise[10];
+extern lv_coord_t upload_series[10];
+extern lv_coord_t download_series[10];
 extern lv_coord_t up_speed_max;
 extern lv_coord_t down_speed_max;
 
@@ -137,10 +106,10 @@ Serial.println("=== END ===");
 
         if (strcmp(dim, DIM_RX) == 0) {
             down_speed = fabs(value) / 8.0;
-            down_speed_max = updateNetSeries(download_serise, down_speed);
+            down_speed_max = updateNetSeries(download_series, down_speed);
         } else if (strcmp(dim, DIM_TX) == 0) {
             up_speed = fabs(value) / 8.0;
-            up_speed_max = updateNetSeries(upload_serise, up_speed);
+            up_speed_max = updateNetSeries(upload_series, up_speed);
         } else if (strcmp(dim, DIM_CPU) == 0) {
             cpu_usage = value;
         } else if (strstr(dim, DIM_MEM) != nullptr) {
