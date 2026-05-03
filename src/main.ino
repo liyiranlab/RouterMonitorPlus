@@ -63,9 +63,10 @@ const char *password = "12345678"; // 连接WiFi密码（此处使用12345678为
 //#define ROUTERMONITORPLUS_8266_HOSTNAME "RouterMonitor"
 
 // 深睡眠总开关： true  启用深睡眠功能， false  完全禁用深睡眠
+// #define DEEP_SLEEP_ENABLED true
 #define DEEP_SLEEP_ENABLED false
 // 深睡眠时间段（24h制,精确到分钟） 定时
-constexpr uint8_t SLEEP_START_HOUR = 21; // 开始：21:20
+constexpr uint8_t SLEEP_START_HOUR = 22; // 开始：22:20
 constexpr uint8_t SLEEP_START_MIN = 20;
 constexpr uint8_t SLEEP_END_HOUR = 07;   // 结束：07:00
 constexpr uint8_t SLEEP_END_MIN = 00;
@@ -89,20 +90,20 @@ constexpr uint32_t POST_POWERON_GRACE_MS = 5 * 60 * 1000UL; // 重新上电(不�
 #define SCREEN_BRIGHTNESS_MIN 255    // 最暗（等同于关闭）
 // 网络请求计数
 static uint8_t requestCycleCount = 0; 
-// 监控数据更新频率(秒)
-#define DEFAULT_BATCH_INTERVAL 1000       // 批量请求间隔基准值（默认 1000ms）
 // ===== 控制全量数据请求的间隔次数 =====
 // 每 FULL_REQUEST_INTERVAL 次请求中，第1次获取全部数据，剩余次数仅获取 CPU + 网速
 // 默认值 5 表示每隔5秒请求一次内存和温度，其余4秒只请求变化快的指标cpu，网速
 #define FULL_REQUEST_INTERVAL 5
 // 全局变量 task_cb 完成时刻标记
 unsigned long lastUiUpdateDone = 0;   // task_cb 完成时刻
-const unsigned long batchRequestInterval = 300;
+// 监控数据更新延时
+// 实际数据更新频率受到：是否以显示过，UI是否刷新完成，网络请求状态是否空闲等共同限制
+// 实际数据更新频率被 task_cb 的运行频率牢牢锁住
+const unsigned long batchRequestInterval = 300; // 批量请求监控数据更新延时
 const unsigned long UI_WIFI_MARGIN = 100; // UI 完成到允许发起请求的最小间隔(ms)
 
 #include <lvgl.h>
 #include <TFT_eSPI.h>
-#include <string>
 #include <ESP8266WiFi.h>
 #include "NetData.h"
 #include <NTPClient.h>
@@ -137,9 +138,12 @@ const unsigned long FAST_CHECK_INTERVAL = 20000;  // 快速阶段：20秒
 const unsigned long SLOW_CHECK_INTERVAL = 60000;  // 稳定阶段：60秒
 const unsigned long FAST_PHASE_DURATION = 180000; // 前3分钟为快速阶段
 
-// ==== 新增：NTP同步控制 ====
+// ==== NTP同步控制 ====
 unsigned long lastNTPSyncTime = 0;
 const unsigned long NTP_SYNC_INTERVAL = 2 * 3600 * 1000; // 2小时同步一次
+// 深睡眠前半小时强制同步
+const unsigned long FORCE_SYNC_INTERVAL = 30 * 60 * 1000;
+
 
 // 在此处列出SD2小电视真正用到的引脚
 // ：TFT_BL = 5，TFT_DC = 4，LED = 2，DC=0， RES=2， SCK=14, MOSI=13, 其余引脚区别设置为高阻
@@ -176,10 +180,6 @@ DeviceState deviceState = STATE_BOOT; // 当前设备状态
 unsigned long stateStartTime = 0;     // 状态开始时间
 unsigned long gracePeriodEnd = 0;     // 宽限期结束时间
 
-// 在现有常量定义后添加
-const unsigned long NTP_VALID_DURATION = 30 * 60 * 1000;  // 30分钟
-const unsigned long FORCE_SYNC_INTERVAL = 30 * 60 * 1000; // 深睡眠前半小时强制同步
-
 bool isLoggedIn = false; // 新增：登录状态标志
 unsigned long lastRefreshTime = 0;
 const unsigned long LOGGED_IN_REFRESH_INTERVAL = 499; // 登录后屏幕刷新间隔(ms)待机时间 不建议修改
@@ -200,9 +200,6 @@ struct TimeCheckResult
     uint8_t currentHour;   // 当前小时
     uint8_t currentMinute; // 当前分钟
 };
-
-// // ===== 屏幕刷新标志，用于屏蔽屏幕刷新期间的 WiFi 操作 =====
-// bool screenRefreshing = false;
 
 WiFiConnectionState wifiState = WIFI_STATE_DISCONNECTED; // 初始状态为断开
 unsigned long wifiConnectionStartTime = 0;               // 连接开始时间
@@ -303,8 +300,8 @@ double down_speed;
 double cpu_usage;
 double mem_usage;
 double temp_value;
-lv_coord_t upload_serise[10] = {0};
-lv_coord_t download_serise[10] = {0};
+lv_coord_t upload_series[10] = {0};
+lv_coord_t download_series[10] = {0};
 
 // ===== 前置声明 =====
 // 函数声明
@@ -669,7 +666,6 @@ void setDisplayState(bool enable)
         lv_deinit();
         delay(1);
         tft.fillScreen(TFT_BLACK);
-        delay(1);
         // 额外发送关闭命令确保屏幕完全关闭
         tft.writecommand(TFT_SLPIN);  // 进入睡眠模式
         delay(1);
@@ -677,7 +673,7 @@ void setDisplayState(bool enable)
         delay(1);
         setBrightness(SCREEN_BRIGHTNESS_OFF);
         pinMode(TFT_BL, INPUT); // 设置为高阻态，减少功耗
-        delay(1);
+
         uiReady = false; // 标记UI需要重新初始化
 #ifdef DEBUG_ENABLED_0
         Serial.println("Display turned OFF\n");
@@ -711,7 +707,6 @@ bool startAsyncNTPSync(bool force = false)
     ntpState = NTP_STATE_SYNCING;
     ntpSyncStartTime = millis();
     timeClient.forceUpdate(); // 发送 NTP 请求，非阻塞启动
-    delay(1);
 
     #ifdef DEBUG_ENABLED_0
     Serial.println("NTP sync started\n");
@@ -1034,9 +1029,7 @@ void actualEnterDeepSleep(uint32_t seconds, bool alreadyCompensated = false)
 
     // 优化后：单次断开 + 强制射频关闭
     closeNetdataConnection();  // 关闭 NetData 连接
-    delay(1);
     WiFi.disconnect(true);   // 清除连接状态
-    delay(1);
     WiFi.mode(WIFI_OFF);     // 关闭 WiFi 模式
     delay(1);
     WiFi.forceSleepBegin();  // 强制射频进入睡眠（比 mode OFF 更省电）
@@ -1236,7 +1229,7 @@ bool connectWiFi(bool forceFullReset)
     return false;
 }
 
-// ===== 3： handleWiFiConnection() =====
+// ===== handleWiFiConnection() =====
 void handleWiFiConnection()
 {
     static unsigned long lastWiFiCheckTime = 0;
@@ -1350,7 +1343,7 @@ void handleWiFiConnection()
             }
 
             unsigned long now = millis();
-            unsigned long timeSinceConnect = (wifiState == WIFI_STATE_CONNECTED) ? (now - wifiConnectionStartTime) : 0;
+            unsigned long timeSinceConnect = now - wifiConnectionStartTime;
             unsigned long checkInterval = (timeSinceConnect < FAST_PHASE_DURATION) ? FAST_CHECK_INTERVAL : SLOW_CHECK_INTERVAL;
 
             if (now - lastRSSICheck > checkInterval){
@@ -1520,11 +1513,11 @@ static void task_cb(lv_task_t *task)
     if (ip_label && wifi_status_led) {
         static WiFiConnectionState lastDisplayedState = WIFI_STATE_DISCONNECTED;
         static String lastDisplayedText;
-        static unsigned long lastUiUpdateTime = 0;
+        //static unsigned long lastUiUpdateTime = 0;
         
         // 每1秒检查一次是否需要更新UI
-        if (millis() - lastUiUpdateTime > 1000) {
-            lastUiUpdateTime = millis();
+        //if (millis() - lastUiUpdateTime > 1000) {
+        //    lastUiUpdateTime = millis();
             
             // 根据状态生成显示文本
             String currentText;
@@ -1562,7 +1555,7 @@ static void task_cb(lv_task_t *task)
                 Serial.printf("[UI] WiFi state updated: %d, Text: %s\n", wifiState, currentText.c_str());
                 #endif
             }
-        }
+        //}
     }
 
     // ===== 修改：只在WiFi连接成功时获取网络数据 =====
@@ -1605,8 +1598,8 @@ static void task_cb(lv_task_t *task)
 
         if (needChartUpdate) {
             // 更新图表系列
-            lv_chart_set_points(chart, ser2, download_serise);  // 下载（绿色）
-            lv_chart_set_points(chart, ser1, upload_serise);    // 上传（红色）
+            lv_chart_set_points(chart, ser2, download_series);  // 下载（绿色）
+            lv_chart_set_points(chart, ser1, upload_series);    // 上传（红色）
             updateChartRange();                                 // 自适应 Y 轴范围
             lv_chart_refresh(chart);                            // 立即刷新显示
         }
@@ -1629,25 +1622,11 @@ static void task_cb(lv_task_t *task)
     // lv_arc_set_end_angle(temperature_arc, end_value);
 
 #ifdef DEBUG_ENABLED_RAM
-    if (isLoggedIn)
-    {
+    if (isLoggedIn) {
         // 调试信息输出
         uint32_t freeRamBytes = ESP.getFreeHeap();
         float freeRamKB = freeRamBytes / 1024.0f;
         Serial.printf("[RAM] Free: %.2f KB (%d bytes) \n", freeRamKB, freeRamBytes);
-
-        // uint32_t freeHeap = ESP.getFreeHeap();
-        // Serial.printf("Pre-sleep check: Free heap: %u bytes\n", freeHeap);
-
-        // uint32_t task_duration = millis() - task_start;
-        // if (last_time > 0)
-        // {
-        //     uint32_t cycle_time = task_start - last_time;
-        //     float cpu_usage_percent = 100.0 * (float)task_duration / cycle_time;
-        //     Serial.printf("[CPU] Usage: %.1f%% | Task: %dms | Cycle: %dms\n",
-        //                 cpu_usage_percent, task_duration, cycle_time);
-        // }
-        // last_time = task_start;
         }
 #endif
 
@@ -1748,7 +1727,7 @@ void UI_init(void)
     lv_obj_t *down_label = lv_label_create(monitor_page, NULL);
     lv_obj_add_style(down_label, LV_LABEL_PART_MAIN, &iconfont);
     lv_label_set_text(down_label, CUSTOM_SYMBOL_DOWNLOAD);
-    speed_label_color = lv_color_hex(0x838a99);
+    // speed_label_color = lv_color_hex(0x838a99);
     lv_obj_set_style_local_text_color(down_label, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_GREEN);
     lv_obj_set_pos(down_label, 120, 18);
 
@@ -1801,8 +1780,8 @@ void UI_init(void)
     ser2 = lv_chart_add_series(chart, LV_COLOR_GREEN);
 
     // /*Directly set points on 'ser2'*/
-    lv_chart_set_points(chart, ser2, download_serise);
-    lv_chart_set_points(chart, ser1, upload_serise);
+    lv_chart_set_points(chart, ser2, download_series);
+    lv_chart_set_points(chart, ser1, upload_series);
 
     lv_chart_refresh(chart); /*Required after direct set*/
 
@@ -2095,12 +2074,12 @@ void loop()
     // ⚡ 冲刺读取：一旦有 HTTP 活动，全力推进状态机，直到完成或超时
     if (isLoggedIn && httpCtx.state != HTTP_IDLE && httpCtx.state != HTTP_COMPLETED && httpCtx.state != HTTP_ERROR) {
         unsigned long sprintStart = millis();
+        unsigned int sprintCounter = 0;
         // 最多冲刺 80ms，一般情况下 1~2ms 就足够清空缓冲区
         while (httpCtx.state != HTTP_COMPLETED && httpCtx.state != HTTP_ERROR
                && millis() - sprintStart < 80) {
             handleAsyncHttp();
             // 每推进 8 次喂一次狗，防止长时间无 yield 导致 WDT
-            static unsigned int sprintCounter = 0;
             if (++sprintCounter % 8 == 0) {
                 ESP.wdtFeed();
                 delay(0);   // 极短暂的 yield，但不影响冲刺效果
@@ -2125,6 +2104,7 @@ void loop()
                     if (requestCycleCount % FULL_REQUEST_INTERVAL == 0) {
                         newMemData = true;
                         newTempData = true;
+                        requestCycleCount = 0;
                     }
                     requestCycleCount++;                   // 每次请求计数+1
                 } else {
@@ -2340,12 +2320,9 @@ void loop()
         // 登录后：数据驱动 + 低频保底
         bool hasNewData = (newCPUData && newNetRxData && newNetTxData);
     // 仅在 WiFi 空闲 +（有新数据 或 保底时间到）时刷新
-        if (!isWiFiTransactionActive() && (hasNewData || (millis() - lastRefreshTime >= LOGGED_IN_REFRESH_INTERVAL))){
-                // 设置屏幕刷新标志，防止期间触发 WiFi 状态检查
-                //screenRefreshing = true;
+        if (!isWiFiTransactionActive() && (hasNewData || (millis() - lastRefreshTime >= LOGGED_IN_REFRESH_INTERVAL))) {
                 lv_task_handler();
                 lastRefreshTime = millis();
-                //screenRefreshing = false;
             }
     } else {
         // 登录前：保持原 10ms 高速刷新，保证启动动画流畅
